@@ -262,8 +262,20 @@ function persist() {
   return p;
 }
 async function persistOrWarn(okMsg) {
-  try { await persist(); if (okMsg) toast(okMsg); } catch (e) { toast('保存に失敗しました'); }
+  try { await persist(); if (okMsg) toast(okMsg); return true; } catch (e) { toast('保存に失敗しました'); return false; }
 }
+// 変更履歴(追記専用ログ)。保存に成功した変更だけを記録する
+function logChange(action, target, before, after, extra) {
+  if (STORAGE_MODE !== 'file') return;
+  const entry = Object.assign({ action: action, target: target }, extra || {});
+  if (before !== undefined) entry.before = before;
+  if (after !== undefined) entry.after = after;
+  invoke('append_history', { entry: JSON.stringify(entry) }).catch(function () { toast('変更履歴の記録に失敗しました'); });
+}
+async function saveAndLog(action, target, before, after, okMsg, extra) {
+  if (await persistOrWarn(okMsg)) logChange(action, target, before, after, extra);
+}
+function findById(list, id) { return list.find(function (x) { return x.id === id; }); }
 
 const Store = {
   async loadAll() {
@@ -282,59 +294,71 @@ const Store = {
     state.settings = Object.assign(defaultSettings(), data.settings || {});
   },
   async saveSettings(patch) {
+    const before = state.settings;
     state.settings = Object.assign({}, state.settings, patch);
-    await persistOrWarn('設定を保存しました');
+    await saveAndLog('update', 'settings', before, state.settings, '設定を保存しました');
   },
   async addTransaction(tx) {
     const doc = Object.assign({}, tx, { id: uid('tx'), createdAt: new Date().toISOString() });
     state.transactions.push(doc);
-    await persistOrWarn();
+    await saveAndLog('add', 'transaction', undefined, doc);
     return doc;
   },
   async updateTransaction(id, patch) {
     const idx = state.transactions.findIndex(function (t) { return t.id === id; }); if (idx < 0) return;
-    state.transactions[idx] = Object.assign({}, state.transactions[idx], patch);
-    await persistOrWarn();
+    const before = state.transactions[idx];
+    state.transactions[idx] = Object.assign({}, before, patch);
+    await saveAndLog('update', 'transaction', before, state.transactions[idx]);
   },
   async deleteTransaction(id) {
+    const before = findById(state.transactions, id);
     state.transactions = state.transactions.filter(function (t) { return t.id !== id; });
-    await persistOrWarn();
+    await saveAndLog('delete', 'transaction', before, undefined);
   },
   async addInvoice(inv) {
     const doc = Object.assign({}, inv, { id: uid('inv'), createdAt: new Date().toISOString() });
     state.invoices.push(doc);
-    await persistOrWarn();
+    await saveAndLog('add', 'invoice', undefined, doc);
     return doc;
   },
   async updateInvoice(id, patch) {
     const idx = state.invoices.findIndex(function (t) { return t.id === id; }); if (idx < 0) return;
-    state.invoices[idx] = Object.assign({}, state.invoices[idx], patch);
-    await persistOrWarn();
+    const before = state.invoices[idx];
+    state.invoices[idx] = Object.assign({}, before, patch);
+    await saveAndLog('update', 'invoice', before, state.invoices[idx]);
   },
   async deleteInvoice(id) {
+    const before = findById(state.invoices, id);
     state.invoices = state.invoices.filter(function (t) { return t.id !== id; });
-    await persistOrWarn();
+    await saveAndLog('delete', 'invoice', before, undefined);
   },
   async addFixedAsset(a) {
-    state.fixedAssets.push(Object.assign({}, a, { id: uid('fa') }));
-    await persistOrWarn();
+    const doc = Object.assign({}, a, { id: uid('fa') });
+    state.fixedAssets.push(doc);
+    await saveAndLog('add', 'fixedAsset', undefined, doc);
   },
   async updateFixedAsset(id, patch) {
     const idx = state.fixedAssets.findIndex(function (a) { return a.id === id; }); if (idx < 0) return;
-    state.fixedAssets[idx] = Object.assign({}, state.fixedAssets[idx], patch);
-    await persistOrWarn();
+    const before = state.fixedAssets[idx];
+    state.fixedAssets[idx] = Object.assign({}, before, patch);
+    await saveAndLog('update', 'fixedAsset', before, state.fixedAssets[idx]);
   },
   async deleteFixedAsset(id) {
+    const before = findById(state.fixedAssets, id);
     state.fixedAssets = state.fixedAssets.filter(function (a) { return a.id !== id; });
-    await persistOrWarn();
+    await saveAndLog('delete', 'fixedAsset', before, undefined);
   },
   async setInventoryYear(year, data) {
+    const before = state.inventoryYearEnd[year];
     state.inventoryYearEnd[year] = data;
-    await persistOrWarn('保存しました');
+    await saveAndLog(before ? 'update' : 'add', 'inventory', before, data, '保存しました', { year: Number(year) });
   },
-  async replaceAll(data) {
+  // まとめて置き換える(取り込み・全削除)。履歴には件数の要約を残す
+  async replaceAll(data, action) {
+    const counts = function () { return { transactions: state.transactions.length, invoices: state.invoices.length, fixedAssets: state.fixedAssets.length }; };
+    const before = counts();
     state.transactions = data.transactions; state.invoices = data.invoices; state.settings = data.settings; state.fixedAssets = data.fixedAssets; state.inventoryYearEnd = data.inventoryYearEnd;
-    await persistOrWarn();
+    await saveAndLog(action, 'all', before, counts());
   }
 };
 
@@ -848,6 +872,7 @@ function viewSettings() {
         '<button class="btn secondary" id="export-tx-csv">取引一覧をCSVで書き出す</button>' +
         '<button class="btn secondary" id="export-backup">全データをバックアップ(JSON)として保存</button>' +
         '<button class="btn secondary" id="open-restore">自動バックアップから復元する</button>' +
+        '<button class="btn secondary" id="open-history">変更履歴を見る</button>' +
         '<button class="btn secondary" id="import-backup-btn">バックアップファイル(JSON)を取り込む</button><input type="file" id="import-backup" accept="application/json" hidden>' +
       '</div>' +
       '<div class="note">アプリは起動時と終了時に自動でバックアップを取ります(直近30日分と各月末分を保持)。帳簿は税法上、原則7年(赤字の年は最長10年)の保存義務があります。データとバックアップはこの Mac 内にあるため、Time Machine などで外部ディスクにも保管してください。</div>' +
@@ -917,6 +942,7 @@ function bindViewEvents() {
   const expTx = document.getElementById('export-tx-csv'); if (expTx) expTx.addEventListener('click', exportTransactionsCsv);
   const expBackup = document.getElementById('export-backup'); if (expBackup) expBackup.addEventListener('click', exportBackup);
   const openRestore = document.getElementById('open-restore'); if (openRestore) openRestore.addEventListener('click', openRestoreModal);
+  const openHistory = document.getElementById('open-history'); if (openHistory) openHistory.addEventListener('click', openHistoryModal);
   const impBackup = document.getElementById('import-backup'); if (impBackup) impBackup.addEventListener('change', onImportBackup);
   // ボタンからファイル選択を開く(キーボードでも操作できるように label ではなく button を使う)
   const impBackupBtn = document.getElementById('import-backup-btn'); if (impBackupBtn && impBackup) impBackupBtn.addEventListener('click', function () { impBackup.value = ''; impBackup.click(); });
@@ -1077,7 +1103,7 @@ function onImportBackup(e) {
         fixedAssets: mergeById('fixedAssets'),
         inventoryYearEnd: Object.assign({}, state.inventoryYearEnd, data.inventoryYearEnd || {}),
         settings: Object.assign({}, state.settings, data.settings || {})
-      });
+      }, 'import');
       renderShell();
       const skipped = len(data.transactions) - added.transactions.length;
       openModal('取り込み結果', '<p style="line-height:1.8;">取引 ' + added.transactions.length + ' 件(金額合計 ' + yen(sum(added.transactions)) + ')<br>請求書 ' + added.invoices.length + ' 件<br>固定資産 ' + added.fixedAssets.length + ' 件<br>を取り込みました。' +
@@ -1087,6 +1113,56 @@ function onImportBackup(e) {
   };
   reader.readAsText(file);
 }
+/* ============================== 変更履歴の表示 ============================== */
+const HISTORY_ACTIONS = { add: '追加', update: '修正', delete: '削除', import: '取り込み', restore: '復元', wipe: '全削除' };
+const HISTORY_TARGETS = { transaction: '取引', invoice: '請求書', fixedAsset: '固定資産', inventory: '棚卸高', settings: '設定', all: '全データ' };
+const HISTORY_FIELD_LABELS = { kind: '種類', date: '日付', amount: '金額', memo: 'メモ', fund: '入出金', account: '勘定科目', liability: '負債科目', accountType: '科目区分',
+  number: '請求書番号', issueDate: '発行日', dueDate: '支払期限', clientName: '取引先', clientAddress: '取引先住所', items: '明細', taxRate: '税率', notes: '備考', status: '状態',
+  name: '名称', acquisitionDate: '取得日', cost: '取得価額', usefulLifeYears: '耐用年数', disposalDate: '除却日', opening: '期首棚卸高', closing: '期末棚卸高',
+  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', theme: '表示テーマ' };
+function historySummary(e) {
+  const d = e.after || e.before || {};
+  if (e.target === 'transaction') return (d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.memo ? ' ' + d.memo : '');
+  if (e.target === 'invoice') return (d.number || '') + ' ' + (d.clientName || '');
+  if (e.target === 'fixedAsset') return (d.name || '') + ' ' + yen(d.cost);
+  if (e.target === 'inventory') return (e.year || '') + '年';
+  if (e.target === 'all') {
+    const c = function (x) { return x ? '取引' + x.transactions + '件・請求書' + x.invoices + '件・固定資産' + x.fixedAssets + '件' : ''; };
+    return c(e.before) + ' → ' + c(e.after) + (e.backup ? '(' + backupLabel(e.backup) + ')' : '');
+  }
+  return '';
+}
+function historyValue(k, v) {
+  if (v === undefined || v === null || v === '') return '(なし)';
+  if (k === 'amount' || k === 'cost' || k === 'openingCash' || k === 'openingBank' || k === 'opening' || k === 'closing') return yen(v);
+  if (k === 'kind') return KIND_LABELS[v] || v;
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+// 修正のとき、変わった項目だけを「前 → 後」で並べる
+function historyDiff(e) {
+  if (e.action !== 'update' || !e.before || !e.after || e.target === 'all') return '';
+  const keys = Object.keys(Object.assign({}, e.before, e.after)).filter(function (k) {
+    return k !== 'id' && k !== 'createdAt' && JSON.stringify(e.before[k]) !== JSON.stringify(e.after[k]);
+  });
+  if (!keys.length) return '<div class="muted" style="font-size:12px;">変更なし</div>';
+  return keys.map(function (k) {
+    return '<div style="font-size:12px;">' + esc(HISTORY_FIELD_LABELS[k] || k) + ': ' + esc(historyValue(k, e.before[k])) + ' → ' + esc(historyValue(k, e.after[k])) + '</div>';
+  }).join('');
+}
+async function openHistoryModal() {
+  let lines;
+  try { lines = await invoke('read_history', { limit: 300 }); } catch (e) { toast('変更履歴を読み込めませんでした'); return; }
+  const rows = lines.map(function (l) { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean).map(function (e) {
+    const at = typeof e.at === 'string' ? e.at.slice(0, 19).replace('T', ' ') : '';
+    return '<div class="tx-row" style="display:block;">' +
+      '<div style="font-size:12px;" class="muted">' + esc(at) + '</div>' +
+      '<div><strong>' + esc((HISTORY_TARGETS[e.target] || e.target || '') + 'の' + (HISTORY_ACTIONS[e.action] || e.action || '')) + '</strong> ' + esc(historySummary(e)) + '</div>' +
+      historyDiff(e) + '</div>';
+  }).join('');
+  openModal('変更履歴(新しい順・最大300件)', rows || '<p class="muted">まだ変更履歴がありません。</p>');
+}
+
 /* ============================== 自動バックアップからの復元 ============================== */
 function backupLabel(name) {
   const m = /^data-(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(-pre-restore|-pre-import)?\.json$/.exec(name);
@@ -1115,13 +1191,15 @@ async function restoreFromBackup(name) {
     await saveChain; // 保存待ちの変更を書き終えてから退避・復元する
     await invoke('restore_backup', { name: name });
   } catch (e) { toast('復元に失敗しました'); return; }
+  const before = { transactions: state.transactions.length, invoices: state.invoices.length, fixedAssets: state.fixedAssets.length };
   await Store.loadAll();
+  logChange('restore', 'all', before, { transactions: state.transactions.length, invoices: state.invoices.length, fixedAssets: state.fixedAssets.length }, { backup: name });
   toast('復元しました'); renderShell();
 }
 async function onWipeAll() {
   if (!(await confirmDialog('本当にすべてのデータを削除しますか?この操作は取り消せません。', '次へ'))) return;
   if (!(await confirmDialog('もう一度確認します。取引・請求書・資産・設定がすべて削除されます。よろしいですか?', 'すべて削除する'))) return;
-  await Store.replaceAll({ transactions: [], invoices: [], settings: defaultSettings(), fixedAssets: [], inventoryYearEnd: {} });
+  await Store.replaceAll({ transactions: [], invoices: [], settings: defaultSettings(), fixedAssets: [], inventoryYearEnd: {} }, 'wipe');
   toast('削除しました'); renderShell();
 }
 

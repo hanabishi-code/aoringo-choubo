@@ -8,6 +8,8 @@ const BACKUP_DIR: &str = "backups";
 const KEEP_DAYS: i64 = 30;
 const PRE_RESTORE_SUFFIX: &str = "-pre-restore";
 const PRE_IMPORT_SUFFIX: &str = "-pre-import";
+const HISTORY_FILE: &str = "history.jsonl";
+const MAX_HISTORY_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_DATA_BYTES: usize = 200 * 1024 * 1024;
 
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -213,6 +215,67 @@ fn backup_before_import(app: tauri::AppHandle) -> Result<(), String> {
     backup_with_suffix(&app, PRE_IMPORT_SUFFIX)
 }
 
+/* ---------- 変更履歴(追記専用) ---------- */
+
+/// 1件を1行の JSON として追記する。日時はこちらで付ける。書き換え・削除のコマンドは用意しない。
+fn append_history_line(path: &Path, entry: &str, at: &str) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    if entry.len() > MAX_HISTORY_ENTRY_BYTES {
+        return Err("履歴が大きすぎます".into());
+    }
+    let mut v: serde_json::Value = serde_json::from_str(entry).map_err(|e| e.to_string())?;
+    let obj = v.as_object_mut().ok_or("履歴の形式が不正です")?;
+    obj.insert("at".into(), serde_json::Value::String(at.to_string()));
+    let mut line = serde_json::to_string(&v).map_err(|e| e.to_string())?;
+    line.push('\n');
+    let mut f = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    // 前回の書き込みが途中で終わっていたら(末尾に改行がない)、改行を補ってから追記する
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    if len > 0 {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut last = [0u8; 1];
+        f.seek(SeekFrom::End(-1)).map_err(|e| e.to_string())?;
+        f.read_exact(&mut last).map_err(|e| e.to_string())?;
+        if last[0] != b'\n' {
+            line.insert(0, '\n');
+        }
+    }
+    f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    f.sync_data().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn append_history(app: tauri::AppHandle, entry: String) -> Result<(), String> {
+    let at = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
+    append_history_line(&data_dir(&app)?.join(HISTORY_FILE), &entry, &at)
+}
+
+/// 新しい順に最大 limit 件。強制終了で途中まで書かれた行などは読み飛ばす。
+fn read_history_lines(path: &Path, limit: usize) -> Result<Vec<String>, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e.to_string()),
+    };
+    Ok(text
+        .lines()
+        .rev()
+        .filter(|l| serde_json::from_str::<serde_json::Value>(l).is_ok())
+        .take(limit)
+        .map(|l| l.to_string())
+        .collect())
+}
+
+#[tauri::command]
+fn read_history(app: tauri::AppHandle, limit: usize) -> Result<Vec<String>, String> {
+    read_history_lines(&data_dir(&app)?.join(HISTORY_FILE), limit.min(5000))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -223,7 +286,9 @@ pub fn run() {
             list_backups,
             read_backup,
             restore_backup,
-            backup_before_import
+            backup_before_import,
+            append_history,
+            read_history
         ])
         .setup(|app| {
             if let Err(e) = auto_backup(app.handle()) {
@@ -275,6 +340,24 @@ mod tests {
                 "data-2026-09-28_072000-pre-restore.json"
             ]
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn history_appends_and_skips_broken_lines() {
+        let dir = std::env::temp_dir().join(format!("keiri-test-hist-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(HISTORY_FILE);
+        append_history_line(&path, r#"{"action":"add","n":1}"#, "2026-09-28T08:00:00+09:00").unwrap();
+        // 強制終了で途中まで書かれた行を再現
+        fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"{\"action\":\"upd").unwrap();
+        append_history_line(&path, r#"{"action":"delete","n":2}"#, "2026-09-28T08:01:00+09:00").unwrap();
+        assert!(append_history_line(&path, "not json", "x").is_err());
+        assert!(append_history_line(&path, "[1]", "x").is_err());
+        let lines = read_history_lines(&path, 10).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"n\":2") && lines[0].contains("08:01:00"));
+        assert!(lines[1].contains("\"n\":1"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
