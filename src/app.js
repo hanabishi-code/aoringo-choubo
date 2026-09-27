@@ -847,9 +847,10 @@ function viewSettings() {
       '<div style="display:flex; flex-direction:column; gap:10px;">' +
         '<button class="btn secondary" id="export-tx-csv">取引一覧をCSVで書き出す</button>' +
         '<button class="btn secondary" id="export-backup">全データをバックアップ(JSON)として保存</button>' +
-        '<label class="btn ghost" style="text-align:center; cursor:pointer;">バックアップから復元する<input type="file" id="import-backup" accept="application/json" style="display:none;"></label>' +
+        '<button class="btn secondary" id="open-restore">自動バックアップから復元する</button>' +
+        '<label class="btn ghost" style="text-align:center; cursor:pointer;">バックアップファイル(JSON)を取り込む<input type="file" id="import-backup" accept="application/json" style="display:none;"></label>' +
       '</div>' +
-      '<div class="note">帳簿は税法上、原則7年(赤字の年は最長10年)の保存義務があります。この保存機能はご利用のアカウントに保存されますが、念のため定期的にバックアップを取り、ご自身のパソコンやクラウドストレージにも保管しておくことを強くおすすめします。</div>' +
+      '<div class="note">アプリは起動時と終了時に自動でバックアップを取ります(直近30日分と各月末分を保持)。帳簿は税法上、原則7年(赤字の年は最長10年)の保存義務があります。データとバックアップはこの Mac 内にあるため、Time Machine などで外部ディスクにも保管してください。</div>' +
     '</section>' +
     '<section class="block"><h2>危険な操作</h2><button class="btn danger" id="wipe-all">すべてのデータを削除する</button></section>'
   );
@@ -915,6 +916,7 @@ function bindViewEvents() {
   if (saveOpening) saveOpening.addEventListener('click', function () { Store.saveSettings({ openingDate: val('s-openingDate'), openingCash: Number(val('s-openingCash')) || 0, openingBank: Number(val('s-openingBank')) || 0 }).then(renderShell); });
   const expTx = document.getElementById('export-tx-csv'); if (expTx) expTx.addEventListener('click', exportTransactionsCsv);
   const expBackup = document.getElementById('export-backup'); if (expBackup) expBackup.addEventListener('click', exportBackup);
+  const openRestore = document.getElementById('open-restore'); if (openRestore) openRestore.addEventListener('click', openRestoreModal);
   const impBackup = document.getElementById('import-backup'); if (impBackup) impBackup.addEventListener('change', onImportBackup);
   const wipe = document.getElementById('wipe-all'); if (wipe) wipe.addEventListener('click', onWipeAll);
 }
@@ -1053,21 +1055,66 @@ function onImportBackup(e) {
   const reader = new FileReader();
   reader.onload = async function () {
     try {
-      const data = sanitizeBackup(JSON.parse(reader.result));
-      if (!(await confirmDialog('現在のデータをバックアップの内容で統合します。よろしいですか?', '統合する'))) return;
+      const raw = JSON.parse(reader.result);
+      const data = sanitizeBackup(raw);
+      const rawLen = function (a) { return Array.isArray(a) ? a.length : 0; };
+      const len = function (a) { return Array.isArray(a) ? a.length : 0; };
+      const sum = function (a) { return (a || []).reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0); };
+      const dropped = (rawLen(raw.transactions) - len(data.transactions)) + (rawLen(raw.invoices) - len(data.invoices)) + (rawLen(raw.fixedAssets) - len(data.fixedAssets));
+      const msg = 'ファイルの内容: 取引 ' + len(data.transactions) + ' 件(金額合計 ' + yen(sum(data.transactions)) + ')・請求書 ' + len(data.invoices) + ' 件・固定資産 ' + len(data.fixedAssets) + ' 件' +
+        (dropped > 0 ? '。形式が正しくない ' + dropped + ' 件は取り込みません' : '') + '。現在のデータと統合します(同じ ID のものは取り込みません)。現在のデータは取り込み前に退避されます。よろしいですか?';
+      if (!(await confirmDialog(msg, '取り込む'))) return;
+      await saveChain; // 保存待ちの変更を書き終えてから退避する
+      await invoke('backup_before_import');
       // 既存と同じ ID のものは取り込まない(統合)
-      function mergeById(cur, add) { if (!Array.isArray(add)) return cur; const ids = new Set(cur.map(function (x) { return x.id; })); return cur.concat(add.filter(function (x) { return !ids.has(x.id); })); }
+      const added = { transactions: [], invoices: [], fixedAssets: [] };
+      function mergeById(key) { const cur = state[key], add = data[key]; if (!Array.isArray(add)) return cur; const ids = new Set(cur.map(function (x) { return x.id; })); added[key] = add.filter(function (x) { return !ids.has(x.id); }); return cur.concat(added[key]); }
       await Store.replaceAll({
-        transactions: mergeById(state.transactions, data.transactions),
-        invoices: mergeById(state.invoices, data.invoices),
-        fixedAssets: mergeById(state.fixedAssets, data.fixedAssets),
+        transactions: mergeById('transactions'),
+        invoices: mergeById('invoices'),
+        fixedAssets: mergeById('fixedAssets'),
         inventoryYearEnd: Object.assign({}, state.inventoryYearEnd, data.inventoryYearEnd || {}),
         settings: Object.assign({}, state.settings, data.settings || {})
       });
-      toast('復元しました'); renderShell();
-    } catch (err) { toast(err && err.userMessage ? err.userMessage : '復元に失敗しました。ファイルを確認してください'); }
+      renderShell();
+      const skipped = len(data.transactions) - added.transactions.length;
+      openModal('取り込み結果', '<p style="line-height:1.8;">取引 ' + added.transactions.length + ' 件(金額合計 ' + yen(sum(added.transactions)) + ')<br>請求書 ' + added.invoices.length + ' 件<br>固定資産 ' + added.fixedAssets.length + ' 件<br>を取り込みました。' +
+        (skipped > 0 ? '<br>取引 ' + skipped + ' 件はすでにあるため取り込んでいません。' : '') + '</p>' +
+        '<p class="muted" style="margin-top:10px;">取り込み後の取引は合計 ' + state.transactions.length + ' 件(金額合計 ' + yen(sum(state.transactions)) + ')です。</p>');
+    } catch (err) { toast(err && err.userMessage ? err.userMessage : '取り込みに失敗しました。ファイルを確認してください'); }
   };
   reader.readAsText(file);
+}
+/* ============================== 自動バックアップからの復元 ============================== */
+function backupLabel(name) {
+  const m = /^data-(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(-pre-restore|-pre-import)?\.json$/.exec(name);
+  if (!m) return name;
+  const tag = m[7] === '-pre-restore' ? '(復元前の退避)' : m[7] === '-pre-import' ? '(取り込み前の退避)' : '';
+  return m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日 ' + m[4] + ':' + m[5] + ':' + m[6] + tag;
+}
+async function openRestoreModal() {
+  let names;
+  try { names = await invoke('list_backups'); } catch (e) { toast('バックアップ一覧を読み込めませんでした'); return; }
+  const rows = names.length ? names.map(function (n) {
+    return '<div class="tx-row" style="align-items:center;"><div style="flex:1;">' + esc(backupLabel(n)) + '</div>' +
+      '<button class="btn ghost small" data-restore="' + esc(n) + '">この時点に戻す</button></div>';
+  }).join('') : '<p class="muted">まだバックアップがありません。</p>';
+  openModal('自動バックアップから復元', '<div class="note" style="margin-bottom:12px;">選んだ時点のデータに置き換えます。現在のデータは「復元前の退避」として自動で保存されます。</div>' + rows);
+  document.querySelectorAll('[data-restore]').forEach(function (b) { b.addEventListener('click', function () { restoreFromBackup(b.dataset.restore); }); });
+}
+async function restoreFromBackup(name) {
+  let data;
+  try { data = sanitizeBackup(JSON.parse(await invoke('read_backup', { name: name }))); }
+  catch (e) { toast('このバックアップは読み込めません'); return; }
+  const count = function (a) { return Array.isArray(a) ? a.length : 0; };
+  const msg = backupLabel(name) + ' の状態に戻します(取引 ' + count(data.transactions) + ' 件・請求書 ' + count(data.invoices) + ' 件・固定資産 ' + count(data.fixedAssets) + ' 件)。現在のデータは退避されます。よろしいですか?';
+  if (!(await confirmDialog(msg, '復元する'))) return;
+  try {
+    await saveChain; // 保存待ちの変更を書き終えてから退避・復元する
+    await invoke('restore_backup', { name: name });
+  } catch (e) { toast('復元に失敗しました'); return; }
+  await Store.loadAll();
+  toast('復元しました'); renderShell();
 }
 async function onWipeAll() {
   if (!(await confirmDialog('本当にすべてのデータを削除しますか?この操作は取り消せません。', '次へ'))) return;
