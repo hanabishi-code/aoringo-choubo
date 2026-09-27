@@ -1,0 +1,373 @@
+{
+  "transactions": [
+    {
+      "id": "tx_legacy001",
+      "kind": "income",
+      "date": "2025-01-25",
+      "amount": 451000,
+      "memo": "テスト1",
+      "createdAt": "2025-01-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy002",
+      "kind": "expense",
+      "date": "2025-01-10",
+      "amount": 29100,
+      "memo": "テスト2",
+      "createdAt": "2025-01-10T09:00:00.000Z",
+      "fund": "bank",
+      "account": "tax"
+    },
+    {
+      "id": "tx_legacy003",
+      "kind": "income",
+      "date": "2025-02-25",
+      "amount": 209000,
+      "memo": "テスト3",
+      "createdAt": "2025-02-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy004",
+      "kind": "expense",
+      "date": "2025-02-10",
+      "amount": 5800,
+      "memo": "テスト4",
+      "createdAt": "2025-02-10T09:00:00.000Z",
+      "fund": "bank",
+      "account": "advertising"
+    },
+    {
+      "id": "tx_legacy005",
+      "kind": "income",
+      "date": "2025-03-25",
+      "amount": 418000,
+      "memo": "テスト5",
+      "createdAt": "2025-03-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy006",
+      "kind": "expense",
+      "date": "2025-03-10",
+      "amount": 11000,
+      "memo": "テスト6",
+      "createdAt": "2025-03-10T09:00:00.000Z",
+      "fund": "bank",
+      "account": "misc_expense"
+    },
+    {
+      "id": "tx_legacy007",
+      "kind": "income",
+      "date": "2025-04-25",
+      "amount": 116000,
+      "memo": "テスト7",
+      "createdAt": "2025-04-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy008",
+      "kind": "expense",
+      "date": "2025-04-10",
+      "amount": 24600,
+      "memo": "テスト8",
+      "createdAt": "2025-04-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "communication"
+    },
+    {
+      "id": "tx_legacy009",
+      "kind": "income",
+      "date": "2025-05-25",
+      "amount": 442000,
+      "memo": "テスト9",
+      "createdAt": "2025-05-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy010",
+      "kind": "expense",
+      "date": "2025-05-10",
+      "amount": 21500,
+      "memo": "テスト10",
+      "createdAt": "2025-05-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "tax"
+    },
+    {
+      "id": "tx_legacy011",
+      "kind": "income",
+      "date": "2025-06-25",
+      "amount": 196000,
+      "memo": "テスト11",
+      "createdAt": "2025-06-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy012",
+      "kind": "expense",
+      "date": "2025-06-10",
+      "amount": 14800,
+      "memo": "テスト12",
+      "createdAt": "2025-06-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "travel"
+    },
+    {
+      "id": "tx_legacy013",
+      "kind": "income",
+      "date": "2025-07-25",
+      "amount": 346000,
+      "memo": "テスト13",
+      "createdAt": "2025-07-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy014",
+      "kind": "expense",
+      "date": "2025-07-10",
+      "amount": 15700,
+      "memo": "テスト14",
+      "createdAt": "2025-07-10T09:00:00.000Z",
+      "fund": "bank",
+      "account": "utilities"
+    },
+    {
+      "id": "tx_legacy015",
+      "kind": "income",
+      "date": "2025-08-25",
+      "amount": 419000,
+      "memo": "テスト15",
+      "createdAt": "2025-08-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy016",
+      "kind": "expense",
+      "date": "2025-08-10",
+      "amount": 11600,
+      "memo": "テスト16",
+      "createdAt": "2025-08-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "travel"
+    },
+    {
+      "id": "tx_legacy017",
+      "kind": "income",
+      "date": "2025-09-25",
+      "amount": 151000,
+      "memo": "テスト17",
+      "createdAt": "2025-09-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy018",
+      "kind": "expense",
+      "date": "2025-09-10",
+      "amount": 13300,
+      "memo": "テスト18",
+      "createdAt": "2025-09-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "advertising"
+    },
+    {
+      "id": "tx_legacy019",
+      "kind": "income",
+      "date": "2025-10-25",
+      "amount": 228000,
+      "memo": "テスト19",
+      "createdAt": "2025-10-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy020",
+      "kind": "expense",
+      "date": "2025-10-10",
+      "amount": 22700,
+      "memo": "テスト20",
+      "createdAt": "2025-10-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "tax"
+    },
+    {
+      "id": "tx_legacy021",
+      "kind": "income",
+      "date": "2025-11-25",
+      "amount": 439000,
+      "memo": "テスト21",
+      "createdAt": "2025-11-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy022",
+      "kind": "expense",
+      "date": "2025-11-10",
+      "amount": 18800,
+      "memo": "テスト22",
+      "createdAt": "2025-11-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "travel"
+    },
+    {
+      "id": "tx_legacy023",
+      "kind": "income",
+      "date": "2025-12-25",
+      "amount": 389000,
+      "memo": "テスト23",
+      "createdAt": "2025-12-25T09:00:00.000Z",
+      "fund": "bank",
+      "account": "sales"
+    },
+    {
+      "id": "tx_legacy024",
+      "kind": "expense",
+      "date": "2025-12-10",
+      "amount": 13400,
+      "memo": "テスト24",
+      "createdAt": "2025-12-10T09:00:00.000Z",
+      "fund": "cash",
+      "account": "rent"
+    },
+    {
+      "id": "tx_legacy025",
+      "kind": "purchase",
+      "date": "2025-03-05",
+      "amount": 88000,
+      "memo": "テスト25",
+      "createdAt": "2025-03-05T09:00:00.000Z",
+      "fund": "cash"
+    },
+    {
+      "id": "tx_legacy026",
+      "kind": "drawing",
+      "date": "2025-04-01",
+      "amount": 50000,
+      "memo": "テスト26",
+      "createdAt": "2025-04-01T09:00:00.000Z",
+      "fund": "bank"
+    },
+    {
+      "id": "tx_legacy027",
+      "kind": "contribution",
+      "date": "2025-01-05",
+      "amount": 30000,
+      "memo": "テスト27",
+      "createdAt": "2025-01-05T09:00:00.000Z",
+      "fund": "cash"
+    },
+    {
+      "id": "tx_legacy028",
+      "kind": "expense_accrued",
+      "date": "2025-12-31",
+      "amount": 12345,
+      "memo": "テスト28",
+      "createdAt": "2025-12-31T09:00:00.000Z",
+      "account": "utilities",
+      "accountType": "expense",
+      "liability": "accrued"
+    },
+    {
+      "id": "tx_legacy029",
+      "kind": "pay_liability",
+      "date": "2026-01-20",
+      "amount": 12345,
+      "memo": "テスト29",
+      "createdAt": "2026-01-20T09:00:00.000Z",
+      "fund": "bank",
+      "liability": "accrued"
+    },
+    {
+      "id": "tx_legacy030",
+      "kind": "borrow",
+      "date": "2025-02-01",
+      "amount": 1000000,
+      "memo": "テスト30",
+      "createdAt": "2025-02-01T09:00:00.000Z",
+      "fund": "bank"
+    },
+    {
+      "id": "tx_legacy031",
+      "kind": "repay",
+      "date": "2025-08-31",
+      "amount": 100000,
+      "memo": "テスト31",
+      "createdAt": "2025-08-31T09:00:00.000Z",
+      "fund": "bank"
+    }
+  ],
+  "invoices": [
+    {
+      "id": "inv_legacy001",
+      "number": "2025-001",
+      "issueDate": "2025-05-31",
+      "dueDate": "2025-06-30",
+      "clientName": "株式会社テスト",
+      "clientAddress": "東京都",
+      "items": [
+        {
+          "name": "作業",
+          "qty": 10,
+          "unitPrice": 5000
+        }
+      ],
+      "taxRate": 10,
+      "notes": "",
+      "status": "paid"
+    },
+    {
+      "id": "inv_legacy002",
+      "number": "2025-002",
+      "issueDate": "2025-06-30",
+      "dueDate": "2025-07-31",
+      "clientName": "テスト商店",
+      "clientAddress": "",
+      "items": [
+        {
+          "name": "保守",
+          "qty": 1,
+          "unitPrice": 30000
+        }
+      ],
+      "taxRate": 10,
+      "notes": "",
+      "status": "unpaid"
+    }
+  ],
+  "settings": {
+    "businessName": "テスト屋",
+    "ownerName": "テスト太郎",
+    "openingCash": 50000,
+    "openingBank": 300000,
+    "openingDate": "2025-01-01",
+    "invoiceSeq": 2
+  },
+  "fixedAssets": [
+    {
+      "id": "fa_legacy001",
+      "name": "ノートPC",
+      "acquisitionDate": "2025-04-10",
+      "cost": 240000,
+      "usefulLifeYears": 4,
+      "disposalDate": ""
+    }
+  ],
+  "inventoryYearEnd": {
+    "2025": {
+      "opening": 0,
+      "closing": 20000
+    }
+  },
+  "exportedAt": "2025-12-31T12:00:00.000Z"
+}
