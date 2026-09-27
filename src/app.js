@@ -848,7 +848,7 @@ function viewSettings() {
         '<button class="btn secondary" id="export-tx-csv">取引一覧をCSVで書き出す</button>' +
         '<button class="btn secondary" id="export-backup">全データをバックアップ(JSON)として保存</button>' +
         '<button class="btn secondary" id="open-restore">自動バックアップから復元する</button>' +
-        '<label class="btn ghost" style="text-align:center; cursor:pointer;">バックアップファイル(JSON)を取り込む<input type="file" id="import-backup" accept="application/json" style="display:none;"></label>' +
+        '<button class="btn secondary" id="import-backup-btn">バックアップファイル(JSON)を取り込む</button><input type="file" id="import-backup" accept="application/json" hidden>' +
       '</div>' +
       '<div class="note">アプリは起動時と終了時に自動でバックアップを取ります(直近30日分と各月末分を保持)。帳簿は税法上、原則7年(赤字の年は最長10年)の保存義務があります。データとバックアップはこの Mac 内にあるため、Time Machine などで外部ディスクにも保管してください。</div>' +
     '</section>' +
@@ -918,6 +918,8 @@ function bindViewEvents() {
   const expBackup = document.getElementById('export-backup'); if (expBackup) expBackup.addEventListener('click', exportBackup);
   const openRestore = document.getElementById('open-restore'); if (openRestore) openRestore.addEventListener('click', openRestoreModal);
   const impBackup = document.getElementById('import-backup'); if (impBackup) impBackup.addEventListener('change', onImportBackup);
+  // ボタンからファイル選択を開く(キーボードでも操作できるように label ではなく button を使う)
+  const impBackupBtn = document.getElementById('import-backup-btn'); if (impBackupBtn && impBackup) impBackupBtn.addEventListener('click', function () { impBackup.value = ''; impBackup.click(); });
   const wipe = document.getElementById('wipe-all'); if (wipe) wipe.addEventListener('click', onWipeAll);
 }
 
