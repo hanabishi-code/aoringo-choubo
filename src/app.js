@@ -30,8 +30,9 @@ const TABS = [
 
 /* ============================== 状態 ============================== */
 const state = { transactions: [], invoices: [], settings: null, fixedAssets: [], inventoryYearEnd: {} };
-const CAP = { db: null, assets: null, downloads: null };
-let STORAGE_MODE = 'memory';
+let STORAGE_MODE = 'memory'; // 'file' = ファイルに保存 / 'memory' = 保存しない(読み込み失敗時)
+let STORAGE_ERROR = '';
+const RECEIPTS_ENABLED = false; // レシート画像は第2段階の手順7で復活させる
 let currentTab = 'entry';
 let editingTxId = null;
 let invoiceDraft = null;
@@ -243,97 +244,97 @@ function computeBS(asOfDate) {
 }
 
 /* ============================== 保存レイヤー ============================== */
-async function useCap(name) { try { if (!window.claude || !window.claude.use) return null; return await window.claude.use(name); } catch (e) { return null; } }
-function hasLocalStorage() { try { const k = '__t__'; localStorage.setItem(k, '1'); localStorage.removeItem(k); return true; } catch (e) { return false; } }
-function persistLocal(name) { try { localStorage.setItem('keirinote_' + name, JSON.stringify(state[name])); } catch (e) {} }
-function stripId(doc) { const copy = Object.assign({}, doc); delete copy.id; return copy; }
+// データは Rust 側(src-tauri/src/lib.rs)が Application Support 内の data.json に原子的に書き込む
+function invoke(cmd, args) {
+  if (!window.__TAURI__ || !window.__TAURI__.core) return Promise.reject(new Error('Tauri 環境ではありません'));
+  return window.__TAURI__.core.invoke(cmd, args);
+}
+function snapshot() {
+  return { app: 'keiri-note', schemaVersion: SCHEMA_VERSION, transactions: state.transactions, invoices: state.invoices, settings: state.settings, fixedAssets: state.fixedAssets, inventoryYearEnd: state.inventoryYearEnd };
+}
+// 保存は順番に1つずつ実行する(古い内容が新しい内容を上書きしないように)
+let saveChain = Promise.resolve();
+function persist() {
+  if (STORAGE_MODE !== 'file') return Promise.resolve();
+  const json = JSON.stringify(snapshot());
+  const p = saveChain.then(function () { return invoke('save_data', { json: json }); });
+  saveChain = p.catch(function () {});
+  return p;
+}
+async function persistOrWarn(okMsg) {
+  try { await persist(); if (okMsg) toast(okMsg); } catch (e) { toast('保存に失敗しました'); }
+}
 
 const Store = {
   async loadAll() {
-    if (STORAGE_MODE === 'db') {
-      const [txSnap, invSnap, setSnap, faSnap, invYearSnap] = await Promise.all([
-        CAP.db.collection('transactions').get(), CAP.db.collection('invoices').get(), CAP.db.doc('settings/main').get(),
-        CAP.db.collection('fixedAssets').get(), CAP.db.collection('inventoryYears').get()
-      ]);
-      state.transactions = txSnap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
-      state.invoices = invSnap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
-      state.settings = setSnap.exists ? Object.assign(defaultSettings(), setSnap.data()) : defaultSettings();
-      state.fixedAssets = faSnap.docs.map(function (d) { return Object.assign({ id: d.id }, d.data()); });
-      state.inventoryYearEnd = {}; invYearSnap.docs.forEach(function (d) { state.inventoryYearEnd[Number(d.id)] = d.data(); });
-    } else if (STORAGE_MODE === 'local') {
-      state.transactions = JSON.parse(localStorage.getItem('keirinote_transactions') || '[]');
-      state.invoices = JSON.parse(localStorage.getItem('keirinote_invoices') || '[]');
-      state.settings = Object.assign(defaultSettings(), JSON.parse(localStorage.getItem('keirinote_settings') || 'null') || {});
-      state.fixedAssets = JSON.parse(localStorage.getItem('keirinote_fixedAssets') || '[]');
-      state.inventoryYearEnd = JSON.parse(localStorage.getItem('keirinote_inventoryYearEnd') || '{}');
-    } else {
-      state.transactions = []; state.invoices = []; state.settings = defaultSettings(); state.fixedAssets = []; state.inventoryYearEnd = {};
-    }
+    state.transactions = []; state.invoices = []; state.settings = defaultSettings(); state.fixedAssets = []; state.inventoryYearEnd = {};
+    let text;
+    try { text = await invoke('load_data'); } catch (e) { STORAGE_MODE = 'memory'; STORAGE_ERROR = 'データを読み込めませんでした'; return; }
+    STORAGE_MODE = 'file';
+    if (text == null) return;
+    let data;
+    try { data = sanitizeBackup(JSON.parse(text)); }
+    catch (e) { STORAGE_MODE = 'memory'; STORAGE_ERROR = 'データファイルが壊れているため読み込めませんでした(ファイルは上書きしていません)'; return; }
+    if (data.transactions) state.transactions = data.transactions;
+    if (data.invoices) state.invoices = data.invoices;
+    if (data.fixedAssets) state.fixedAssets = data.fixedAssets;
+    if (data.inventoryYearEnd) state.inventoryYearEnd = data.inventoryYearEnd;
+    state.settings = Object.assign(defaultSettings(), data.settings || {});
   },
   async saveSettings(patch) {
     state.settings = Object.assign({}, state.settings, patch);
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('settings/main').set(state.settings); else if (STORAGE_MODE === 'local') persistLocal('settings'); toast('設定を保存しました'); }
-    catch (e) { toast('保存に失敗しました'); }
+    await persistOrWarn('設定を保存しました');
   },
   async addTransaction(tx) {
-    const id = uid('tx'); const doc = Object.assign({}, tx, { id: id, createdAt: new Date().toISOString() });
+    const doc = Object.assign({}, tx, { id: uid('tx'), createdAt: new Date().toISOString() });
     state.transactions.push(doc);
-    try { if (STORAGE_MODE === 'db') await CAP.db.collection('transactions').doc(id).set(stripId(doc)); else if (STORAGE_MODE === 'local') persistLocal('transactions'); }
-    catch (e) { toast('保存に失敗しました'); }
+    await persistOrWarn();
     return doc;
   },
   async updateTransaction(id, patch) {
     const idx = state.transactions.findIndex(function (t) { return t.id === id; }); if (idx < 0) return;
     state.transactions[idx] = Object.assign({}, state.transactions[idx], patch);
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('transactions/' + id).set(stripId(state.transactions[idx])); else if (STORAGE_MODE === 'local') persistLocal('transactions'); }
-    catch (e) { toast('保存に失敗しました'); }
+    await persistOrWarn();
   },
   async deleteTransaction(id) {
-    const tx = state.transactions.find(function (t) { return t.id === id; });
     state.transactions = state.transactions.filter(function (t) { return t.id !== id; });
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('transactions/' + id).delete(); else if (STORAGE_MODE === 'local') persistLocal('transactions'); }
-    catch (e) { toast('削除に失敗しました'); }
-    if (tx && tx.receiptAssetId && CAP.assets) { try { await CAP.assets.delete(tx.receiptAssetId); } catch (e) {} }
+    await persistOrWarn();
   },
   async addInvoice(inv) {
-    const id = uid('inv'); const doc = Object.assign({}, inv, { id: id, createdAt: new Date().toISOString() });
+    const doc = Object.assign({}, inv, { id: uid('inv'), createdAt: new Date().toISOString() });
     state.invoices.push(doc);
-    try { if (STORAGE_MODE === 'db') await CAP.db.collection('invoices').doc(id).set(stripId(doc)); else if (STORAGE_MODE === 'local') persistLocal('invoices'); }
-    catch (e) { toast('保存に失敗しました'); }
+    await persistOrWarn();
     return doc;
   },
   async updateInvoice(id, patch) {
     const idx = state.invoices.findIndex(function (t) { return t.id === id; }); if (idx < 0) return;
     state.invoices[idx] = Object.assign({}, state.invoices[idx], patch);
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('invoices/' + id).set(stripId(state.invoices[idx])); else if (STORAGE_MODE === 'local') persistLocal('invoices'); }
-    catch (e) { toast('保存に失敗しました'); }
+    await persistOrWarn();
   },
   async deleteInvoice(id) {
     state.invoices = state.invoices.filter(function (t) { return t.id !== id; });
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('invoices/' + id).delete(); else if (STORAGE_MODE === 'local') persistLocal('invoices'); }
-    catch (e) { toast('削除に失敗しました'); }
+    await persistOrWarn();
   },
   async addFixedAsset(a) {
-    const id = uid('fa'); const doc = Object.assign({}, a, { id: id });
-    state.fixedAssets.push(doc);
-    try { if (STORAGE_MODE === 'db') await CAP.db.collection('fixedAssets').doc(id).set(stripId(doc)); else if (STORAGE_MODE === 'local') persistLocal('fixedAssets'); }
-    catch (e) { toast('保存に失敗しました'); }
+    state.fixedAssets.push(Object.assign({}, a, { id: uid('fa') }));
+    await persistOrWarn();
   },
   async updateFixedAsset(id, patch) {
     const idx = state.fixedAssets.findIndex(function (a) { return a.id === id; }); if (idx < 0) return;
     state.fixedAssets[idx] = Object.assign({}, state.fixedAssets[idx], patch);
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('fixedAssets/' + id).set(stripId(state.fixedAssets[idx])); else if (STORAGE_MODE === 'local') persistLocal('fixedAssets'); }
-    catch (e) { toast('保存に失敗しました'); }
+    await persistOrWarn();
   },
   async deleteFixedAsset(id) {
     state.fixedAssets = state.fixedAssets.filter(function (a) { return a.id !== id; });
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('fixedAssets/' + id).delete(); else if (STORAGE_MODE === 'local') persistLocal('fixedAssets'); }
-    catch (e) { toast('削除に失敗しました'); }
+    await persistOrWarn();
   },
   async setInventoryYear(year, data) {
     state.inventoryYearEnd[year] = data;
-    try { if (STORAGE_MODE === 'db') await CAP.db.doc('inventoryYears/' + year).set(data); else if (STORAGE_MODE === 'local') persistLocal('inventoryYearEnd'); toast('保存しました'); }
-    catch (e) { toast('保存に失敗しました'); }
+    await persistOrWarn('保存しました');
+  },
+  async replaceAll(data) {
+    state.transactions = data.transactions; state.invoices = data.invoices; state.settings = data.settings; state.fixedAssets = data.fixedAssets; state.inventoryYearEnd = data.inventoryYearEnd;
+    await persistOrWarn();
   }
 };
 
@@ -357,28 +358,35 @@ function compressImage(file, maxDim, quality) {
 }
 
 /* ============================== ダウンロード ============================== */
-async function downloadFile(filename, content, mime) {
-  if (CAP.downloads) {
-    try { const blob = (content instanceof Blob) ? content : new Blob([content], { type: mime || 'text/plain' }); await CAP.downloads.save({ filename: filename, data: blob }); toast('保存しました'); return; }
-    catch (e) {}
-  }
-  try {
-    const blob = (content instanceof Blob) ? content : new Blob([content], { type: mime || 'text/plain' });
-    const url = URL.createObjectURL(blob); const a = document.createElement('a');
-    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
-    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
-  } catch (e) { toast('ダウンロードに失敗しました'); }
+async function downloadFile(filename, content) {
+  // 書き出しは「ダウンロード」フォルダに保存する(同名があれば連番を付ける)
+  try { const path = await invoke('export_file', { filename: filename, content: content }); toast('ダウンロードフォルダに保存しました: ' + path.split('/').pop()); return true; }
+  catch (e) { toast('書き出しに失敗しました'); return false; }
 }
 function csvField(v) { v = String(v == null ? '' : v); if (/[",\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"'; return v; }
 
 /* ============================== モーダル ============================== */
 function openModal(title, bodyHtml) {
+  if (onModalClose) { const f = onModalClose; onModalClose = null; f(); } // 確認中に別のモーダルが開いたら「キャンセル」扱い
   document.getElementById('modal-root').innerHTML =
     '<div class="modal-backdrop" id="modal-backdrop"><div class="modal-sheet"><div class="modal-head"><h3>' + esc(title) + '</h3><button class="modal-close" id="modal-close">&times;</button></div>' + bodyHtml + '</div></div>';
   document.getElementById('modal-close').addEventListener('click', closeModal);
   document.getElementById('modal-backdrop').addEventListener('click', function (e) { if (e.target.id === 'modal-backdrop') closeModal(); });
 }
-function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+let onModalClose = null;
+function closeModal() { document.getElementById('modal-root').innerHTML = ''; const f = onModalClose; onModalClose = null; if (f) f(); }
+// window.confirm() は Tauri(WKWebView)では表示されないため、自前のモーダルで確認する。OK なら true を返す
+function confirmDialog(message, okLabel) {
+  return new Promise(function (resolve) {
+    openModal('確認', '<p style="margin-bottom:18px;line-height:1.7;">' + esc(message) + '</p>' +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;"><button class="btn secondary" id="confirm-cancel">キャンセル</button><button class="btn danger" id="confirm-ok">' + esc(okLabel || 'OK') + '</button></div>');
+    let result = false;
+    onModalClose = function () { resolve(result); };
+    document.getElementById('confirm-cancel').addEventListener('click', closeModal);
+    document.getElementById('confirm-ok').addEventListener('click', function () { result = true; closeModal(); });
+    document.getElementById('confirm-cancel').focus();
+  });
+}
 
 /* ============================== レンダリング: シェル ============================== */
 function renderShell() {
@@ -409,10 +417,9 @@ function renderView() {
   bindViewEvents();
 }
 function storageFlag() {
-  const ok = STORAGE_MODE === 'db';
-  const label = STORAGE_MODE === 'db' ? '保存先: Claude のデータ保存機能(サインインしているアカウントに保存されます)'
-    : STORAGE_MODE === 'local' ? '保存先: このブラウザ内のみ(この端末・ブラウザでのみ有効。定期的にバックアップしてください)'
-    : '保存できません: このデータは再読み込みすると消えます。都度バックアップしてください';
+  const ok = STORAGE_MODE === 'file';
+  const label = ok ? '保存先: この Mac 内のファイル(アプリのデータフォルダ。Time Machine の対象です)'
+    : '保存できません: ' + (STORAGE_ERROR || '保存先を利用できません') + '。この画面での変更は保存されません';
   return '<div class="storage-flag"><span class="storage-dot ' + (ok ? 'ok' : 'warn') + '"></span>' + label + '</div>' + backupReminder();
 }
 function backupReminder() {
@@ -483,8 +490,8 @@ function viewEntry() {
         '<div class="field" id="account-field"></div>' +
         '<div class="field" id="fund-field-wrap"><label>資金</label><div class="radio-group" id="fund-group">' + fundRadio('cash', editing ? editing.fund : 'cash') + fundRadio('bank', editing ? editing.fund : 'cash') + '</div></div>' +
         '<div class="field"><label>取引先・メモ</label><input type="text" id="f-memo" value="' + esc(editing ? (editing.memo || '') : '') + '" placeholder="例:〇〇株式会社 / 交通費など"></div>' +
-        '<div class="field"' + (CAP.assets ? '' : ' hidden') + '><label>レシート・領収書の画像(任意)</label><input type="file" id="f-receipt" accept="image/*">' +
-          (editing && editing.receiptAssetId && CAP.assets ? '<div class="tx-thumb" style="margin-top:8px;width:64px;height:64px;"><img src="/_blob/' + esc(editing.receiptAssetId) + '"></div>' : '') +
+        '<div class="field"' + (RECEIPTS_ENABLED ? '' : ' hidden') + '><label>レシート・領収書の画像(任意)</label><input type="file" id="f-receipt" accept="image/*">' +
+          (editing && editing.receiptAssetId && RECEIPTS_ENABLED ? '<div class="tx-thumb" style="margin-top:8px;width:64px;height:64px;"><img src="/_blob/' + esc(editing.receiptAssetId) + '"></div>' : '') +
         '</div>' +
         '<div style="display:flex; gap:10px; margin-top:16px;"><button type="submit" class="btn block">' + (editing ? '更新する' : '記録する') + '</button>' +
           (editing ? '<button type="button" id="cancel-edit" class="btn secondary">キャンセル</button>' : '') +
@@ -499,7 +506,7 @@ function viewEntry() {
 function txRowHtml(t) {
   const label = primaryLabel(t); const sign = txSign(t); const cls = sign === '+' ? 'income' : 'expense';
   return (
-    '<div class="tx-row">' + (t.receiptAssetId && CAP.assets ? '<div class="tx-thumb"><img src="/_blob/' + esc(t.receiptAssetId) + '"></div>' : '<div class="tx-thumb"></div>') +
+    '<div class="tx-row">' + (t.receiptAssetId && RECEIPTS_ENABLED ? '<div class="tx-thumb"><img src="/_blob/' + esc(t.receiptAssetId) + '"></div>' : '<div class="tx-thumb"></div>') +
       '<div class="tx-main"><div class="tx-top"><span class="tx-cat">' + esc(label) + '</span><span class="tx-amt num ' + cls + '">' + sign + yen(t.amount) + '</span></div>' +
       '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
       '<div class="tx-actions"><a data-edit-tx=\"' + esc(t.id) + '\">編集</a><a data-del-tx=\"' + esc(t.id) + '\" style="color:var(--danger);">削除</a></div></div></div>'
@@ -861,7 +868,7 @@ function bindViewEvents() {
     if (cancelBtn) cancelBtn.addEventListener('click', function () { editingTxId = null; renderView(); });
   }
   document.querySelectorAll('[data-edit-tx]').forEach(function (a) { a.addEventListener('click', function () { editingTxId = a.dataset.editTx; renderView(); window.scrollTo(0, 0); }); });
-  document.querySelectorAll('[data-del-tx]').forEach(function (a) { a.addEventListener('click', async function () { if (!confirm('この取引を削除しますか?')) return; await Store.deleteTransaction(a.dataset.delTx); renderShell(); }); });
+  document.querySelectorAll('[data-del-tx]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この取引を削除しますか?', '削除する'))) return; await Store.deleteTransaction(a.dataset.delTx); renderShell(); }); });
 
   const jy = document.getElementById('journal-year'); if (jy) jy.addEventListener('change', function () { window.__journalYear = Number(jy.value); renderView(); });
   const jm = document.getElementById('journal-month'); if (jm) jm.addEventListener('change', function () { window.__journalMonth = Number(jm.value); renderView(); });
@@ -875,7 +882,7 @@ function bindViewEvents() {
   const assetsYearSel = document.getElementById('assets-year'); if (assetsYearSel) assetsYearSel.addEventListener('change', function () { window.__assetsYear = Number(assetsYearSel.value); renderView(); });
   const newAsset = document.getElementById('new-asset'); if (newAsset) newAsset.addEventListener('click', function () { openAssetModal(null); });
   document.querySelectorAll('[data-edit-asset]').forEach(function (a) { a.addEventListener('click', function () { openAssetModal(state.fixedAssets.find(function (x) { return x.id === a.dataset.editAsset; })); }); });
-  document.querySelectorAll('[data-del-asset]').forEach(function (a) { a.addEventListener('click', async function () { if (!confirm('この固定資産を削除しますか?')) return; await Store.deleteFixedAsset(a.dataset.delAsset); renderView(); }); });
+  document.querySelectorAll('[data-del-asset]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この固定資産を削除しますか?', '削除する'))) return; await Store.deleteFixedAsset(a.dataset.delAsset); renderView(); }); });
   const newInvYear = document.getElementById('new-inv-year'); if (newInvYear) newInvYear.addEventListener('click', function () { openInvYearModal(null); });
   document.querySelectorAll('[data-edit-inv-year]').forEach(function (a) { a.addEventListener('click', function () { openInvYearModal(Number(a.dataset.editInvYear)); }); });
 
@@ -887,7 +894,7 @@ function bindViewEvents() {
     editingInvoiceId = null; renderView();
   });
   document.querySelectorAll('[data-edit-inv]').forEach(function (a) { a.addEventListener('click', function () { const inv = state.invoices.find(function (i) { return i.id === a.dataset.editInv; }); invoiceDraft = JSON.parse(JSON.stringify(inv)); editingInvoiceId = inv.id; renderView(); }); });
-  document.querySelectorAll('[data-del-inv]').forEach(function (a) { a.addEventListener('click', async function () { if (!confirm('この請求書を削除しますか?')) return; await Store.deleteInvoice(a.dataset.delInv); renderView(); }); });
+  document.querySelectorAll('[data-del-inv]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この請求書を削除しますか?', '削除する'))) return; await Store.deleteInvoice(a.dataset.delInv); renderView(); }); });
   document.querySelectorAll('[data-print-inv]').forEach(function (a) { a.addEventListener('click', function () { printInvoice(state.invoices.find(function (i) { return i.id === a.dataset.printInv; })); }); });
   if (document.getElementById('inv-items')) renderInvoiceItems();
   const addItem = document.getElementById('inv-add-item'); if (addItem) addItem.addEventListener('click', function () { invoiceDraft.items.push({ name: '', qty: 1, unitPrice: 0 }); renderInvoiceItems(); updateInvoiceTotalsDisplay(); });
@@ -927,8 +934,7 @@ async function onSubmitTx(e) {
   const fileInput = document.getElementById('f-receipt');
   let receiptAssetId = editingTxId ? (state.transactions.find(function (t) { return t.id === editingTxId; }) || {}).receiptAssetId : undefined;
   if (fileInput && fileInput.files && fileInput.files[0]) {
-    if (CAP.assets) { try { const blob = await compressImage(fileInput.files[0]); const res = await CAP.assets.upload(blob, { type: 'image/jpeg' }); receiptAssetId = res.id; } catch (err) { toast('画像の保存に失敗しました'); } }
-    else toast('この環境では画像の保存が利用できません');
+    toast('この版では画像の保存はまだ利用できません');
   }
   if (receiptAssetId !== undefined) payload.receiptAssetId = receiptAssetId;
 
@@ -965,7 +971,7 @@ function exportTransactionsCsv() {
   state.transactions.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; }).forEach(function (t) {
     lines.push([t.date, KIND_LABELS[t.kind], primaryLabel(t), t.fund ? fundLabel(t.fund) : '', t.amount, t.memo || ''].map(csvField).join(','));
   });
-  downloadFile('取引一覧.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv');
+  downloadFile('取引一覧.csv', '\uFEFF' + lines.join('\r\n'));
 }
 function exportPLCsv() {
   const years = availableYears(); const y = window.__plYear || years[0] || new Date().getFullYear();
@@ -984,12 +990,13 @@ function exportPLCsv() {
   ACCOUNTS.expense.forEach(function (a) { lines.push([a.label, pl.expenseTotals[a.key]].map(csvField).join(',')); });
   lines.push(['経費合計', pl.expenseSum].map(csvField).join(','));
   lines.push(['差引金額(所得金額・控除前)', pl.net].map(csvField).join(','));
-  downloadFile(y + '年_損益計算書.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv');
+  downloadFile(y + '年_損益計算書.csv', '\uFEFF' + lines.join('\r\n'));
 }
 function exportBackup() {
   const data = { app: 'keiri-note', schemaVersion: SCHEMA_VERSION, transactions: state.transactions, invoices: state.invoices, settings: state.settings, fixedAssets: state.fixedAssets, inventoryYearEnd: state.inventoryYearEnd, exportedAt: new Date().toISOString() };
-  downloadFile('経理ノート_バックアップ_' + todayStr() + '.json', JSON.stringify(data, null, 2), 'application/json');
-  try { localStorage.setItem('keirinote_lastBackupAt', new Date().toISOString()); } catch (e) {}
+  downloadFile('経理ノート_バックアップ_' + todayStr() + '.json', JSON.stringify(data, null, 2)).then(function (ok) {
+    if (ok) { try { localStorage.setItem('keirinote_lastBackupAt', new Date().toISOString()); } catch (e) {} }
+  });
 }
 /* ============================== バックアップの検証 ============================== */
 const SCHEMA_VERSION = 1;
@@ -1047,40 +1054,30 @@ function onImportBackup(e) {
   reader.onload = async function () {
     try {
       const data = sanitizeBackup(JSON.parse(reader.result));
-      if (!confirm('現在のデータをバックアップの内容で統合します。よろしいですか?')) return;
-      if (Array.isArray(data.transactions)) { for (const t of data.transactions) { if (!state.transactions.find(function (x) { return x.id === t.id; })) { state.transactions.push(t); if (STORAGE_MODE === 'db') await CAP.db.collection('transactions').doc(t.id).set(stripId(t)); } } if (STORAGE_MODE === 'local') persistLocal('transactions'); }
-      if (Array.isArray(data.invoices)) { for (const inv of data.invoices) { if (!state.invoices.find(function (x) { return x.id === inv.id; })) { state.invoices.push(inv); if (STORAGE_MODE === 'db') await CAP.db.collection('invoices').doc(inv.id).set(stripId(inv)); } } if (STORAGE_MODE === 'local') persistLocal('invoices'); }
-      if (Array.isArray(data.fixedAssets)) { for (const a of data.fixedAssets) { if (!state.fixedAssets.find(function (x) { return x.id === a.id; })) { state.fixedAssets.push(a); if (STORAGE_MODE === 'db') await CAP.db.collection('fixedAssets').doc(a.id).set(stripId(a)); } } if (STORAGE_MODE === 'local') persistLocal('fixedAssets'); }
-      if (data.inventoryYearEnd) { for (const y in data.inventoryYearEnd) { await Store.setInventoryYear(Number(y), data.inventoryYearEnd[y]); } }
-      if (data.settings) await Store.saveSettings(data.settings);
+      if (!(await confirmDialog('現在のデータをバックアップの内容で統合します。よろしいですか?', '統合する'))) return;
+      // 既存と同じ ID のものは取り込まない(統合)
+      function mergeById(cur, add) { if (!Array.isArray(add)) return cur; const ids = new Set(cur.map(function (x) { return x.id; })); return cur.concat(add.filter(function (x) { return !ids.has(x.id); })); }
+      await Store.replaceAll({
+        transactions: mergeById(state.transactions, data.transactions),
+        invoices: mergeById(state.invoices, data.invoices),
+        fixedAssets: mergeById(state.fixedAssets, data.fixedAssets),
+        inventoryYearEnd: Object.assign({}, state.inventoryYearEnd, data.inventoryYearEnd || {}),
+        settings: Object.assign({}, state.settings, data.settings || {})
+      });
       toast('復元しました'); renderShell();
     } catch (err) { toast(err && err.userMessage ? err.userMessage : '復元に失敗しました。ファイルを確認してください'); }
   };
   reader.readAsText(file);
 }
 async function onWipeAll() {
-  if (!confirm('本当にすべてのデータを削除しますか?この操作は取り消せません。')) return;
-  if (!confirm('もう一度確認します。取引・請求書・資産・設定がすべて削除されます。よろしいですか?')) return;
-  try {
-    if (STORAGE_MODE === 'db') {
-      for (const t of state.transactions) await CAP.db.doc('transactions/' + t.id).delete();
-      for (const inv of state.invoices) await CAP.db.doc('invoices/' + inv.id).delete();
-      for (const a of state.fixedAssets) await CAP.db.doc('fixedAssets/' + a.id).delete();
-      for (const y in state.inventoryYearEnd) await CAP.db.doc('inventoryYears/' + y).delete();
-      await CAP.db.doc('settings/main').delete();
-    } else if (STORAGE_MODE === 'local') {
-      ['transactions', 'invoices', 'settings', 'fixedAssets', 'inventoryYearEnd'].forEach(function (k) { localStorage.removeItem('keirinote_' + k); });
-    }
-  } catch (e) {}
-  state.transactions = []; state.invoices = []; state.settings = defaultSettings(); state.fixedAssets = []; state.inventoryYearEnd = {};
+  if (!(await confirmDialog('本当にすべてのデータを削除しますか?この操作は取り消せません。', '次へ'))) return;
+  if (!(await confirmDialog('もう一度確認します。取引・請求書・資産・設定がすべて削除されます。よろしいですか?', 'すべて削除する'))) return;
+  await Store.replaceAll({ transactions: [], invoices: [], settings: defaultSettings(), fixedAssets: [], inventoryYearEnd: {} });
   toast('削除しました'); renderShell();
 }
 
 /* ============================== 初期化 ============================== */
 async function init() {
-  // オフライン版: 外部の保存機能は使わず、この端末のブラウザ内にのみ保存する
-  STORAGE_MODE = hasLocalStorage() ? 'local' : 'memory';
-  try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
   await Store.loadAll();
   renderShell();
 }
