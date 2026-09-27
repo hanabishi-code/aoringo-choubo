@@ -1165,9 +1165,9 @@ async function openHistoryModal() {
 
 /* ============================== 自動バックアップからの復元 ============================== */
 function backupLabel(name) {
-  const m = /^data-(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(-pre-restore|-pre-import)?\.json$/.exec(name);
+  const m = /^data-(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(-pre-restore|-pre-import|-pre-wipe)?\.json$/.exec(name);
   if (!m) return name;
-  const tag = m[7] === '-pre-restore' ? '(復元前の退避)' : m[7] === '-pre-import' ? '(取り込み前の退避)' : '';
+  const tag = m[7] === '-pre-restore' ? '(復元前の退避)' : m[7] === '-pre-import' ? '(取り込み前の退避)' : m[7] === '-pre-wipe' ? '(削除前の退避)' : '';
   return m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日 ' + m[4] + ':' + m[5] + ':' + m[6] + tag;
 }
 async function openRestoreModal() {
@@ -1185,7 +1185,7 @@ async function restoreFromBackup(name) {
   try { data = sanitizeBackup(JSON.parse(await invoke('read_backup', { name: name }))); }
   catch (e) { toast('このバックアップは読み込めません'); return; }
   const count = function (a) { return Array.isArray(a) ? a.length : 0; };
-  const msg = backupLabel(name) + ' の状態に戻します(取引 ' + count(data.transactions) + ' 件・請求書 ' + count(data.invoices) + ' 件・固定資産 ' + count(data.fixedAssets) + ' 件)。現在のデータは退避されます。よろしいですか?';
+  const msg = backupLabel(name) + ' の状態に戻します(取引 ' + count(data.transactions) + ' 件・請求書 ' + count(data.invoices) + ' 件・固定資産 ' + count(data.fixedAssets) + ' 件)' + (/-pre-wipe\.json$/.test(name) ? '。削除前の変更履歴も戻します' : '') + '。現在のデータは退避されます。よろしいですか?';
   if (!(await confirmDialog(msg, '復元する'))) return;
   try {
     await saveChain; // 保存待ちの変更を書き終えてから退避・復元する
@@ -1197,9 +1197,14 @@ async function restoreFromBackup(name) {
   toast('復元しました'); renderShell();
 }
 async function onWipeAll() {
-  if (!(await confirmDialog('本当にすべてのデータを削除しますか?この操作は取り消せません。', '次へ'))) return;
-  if (!(await confirmDialog('もう一度確認します。取引・請求書・資産・設定がすべて削除されます。よろしいですか?', 'すべて削除する'))) return;
-  await Store.replaceAll({ transactions: [], invoices: [], settings: defaultSettings(), fixedAssets: [], inventoryYearEnd: {} }, 'wipe');
+  if (!(await confirmDialog('本当にすべてのデータを削除しますか?取引・請求書・資産・設定と変更履歴が削除されます。削除の直前に「削除前の退避」を自動で作るので、「自動バックアップから復元する」から元に戻せます。', '次へ'))) return;
+  if (!(await confirmDialog('もう一度確認します。すべて削除してよろしいですか?なお、自動バックアップと削除前の退避はこの Mac 内に残ります。完全に消す場合は、保存フォルダ(~/Library/Application Support/com.keirinote.desktop/)ごと削除してください。', 'すべて削除する'))) return;
+  try {
+    await saveChain; // 保存待ちの変更を書き終えてから退避する
+    await invoke('wipe_all'); // 変更履歴も含めて退避し、変更履歴を消す
+  } catch (e) { toast('削除前の退避に失敗したため、削除を中止しました'); return; }
+  state.transactions = []; state.invoices = []; state.settings = defaultSettings(); state.fixedAssets = []; state.inventoryYearEnd = {};
+  await persistOrWarn(); // 変更履歴は消したので、この削除自体は記録しない
   toast('削除しました'); renderShell();
 }
 

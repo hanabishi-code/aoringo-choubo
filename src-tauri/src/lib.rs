@@ -8,6 +8,9 @@ const BACKUP_DIR: &str = "backups";
 const KEEP_DAYS: i64 = 30;
 const PRE_RESTORE_SUFFIX: &str = "-pre-restore";
 const PRE_IMPORT_SUFFIX: &str = "-pre-import";
+const PRE_WIPE_SUFFIX: &str = "-pre-wipe";
+/// 削除前の退避に変更履歴を同梱するときのキー(sanitizeBackup は未知のキーを無視する)
+const BUNDLED_HISTORY_KEY: &str = "_historyJsonl";
 const HISTORY_FILE: &str = "history.jsonl";
 const MAX_HISTORY_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_DATA_BYTES: usize = 200 * 1024 * 1024;
@@ -89,13 +92,14 @@ fn export_file(app: tauri::AppHandle, filename: String, content: String) -> Resu
 
 /* ---------- 自動バックアップ ---------- */
 
-/// "data-YYYY-MM-DD_HHMMSS.json"(退避は "...HHMMSS-pre-restore.json" / "-pre-import.json")から日付を取り出す。
+/// "data-YYYY-MM-DD_HHMMSS.json"(退避は "...HHMMSS-pre-restore.json" / "-pre-import.json" / "-pre-wipe.json")から日付を取り出す。
 /// 形式が違うファイルは None(一覧にも出さず、削除対象にもしない)
 fn backup_date(name: &str) -> Option<chrono::NaiveDate> {
     let rest = name.strip_prefix("data-")?.strip_suffix(".json")?;
     let rest = rest
         .strip_suffix(PRE_RESTORE_SUFFIX)
         .or_else(|| rest.strip_suffix(PRE_IMPORT_SUFFIX))
+        .or_else(|| rest.strip_suffix(PRE_WIPE_SUFFIX))
         .unwrap_or(rest);
     let (date, time) = rest.split_once('_')?;
     if time.len() != 6 || !time.chars().all(|c| c.is_ascii_digit()) {
@@ -204,9 +208,67 @@ fn read_backup(app: tauri::AppHandle, name: String) -> Result<String, String> {
 #[tauri::command]
 fn restore_backup(app: tauri::AppHandle, name: String) -> Result<(), String> {
     let src = fs::read(backup_path(&app, &name)?).map_err(|e| e.to_string())?;
-    serde_json::from_slice::<serde_json::Value>(&src).map_err(|e| e.to_string())?;
     backup_with_suffix(&app, PRE_RESTORE_SUFFIX)?;
-    atomic_write(&data_dir(&app)?.join(DATA_FILE), &src).map_err(|e| e.to_string())
+    restore_into(&data_dir(&app)?, &src)
+}
+
+/// バックアップの内容を data.json に書き戻す。削除前の退避に同梱された変更履歴があれば履歴も戻す。
+fn restore_into(dir: &Path, src: &[u8]) -> Result<(), String> {
+    let mut v: serde_json::Value = serde_json::from_slice(src).map_err(|e| e.to_string())?;
+    let bundled = v
+        .as_object_mut()
+        .and_then(|o| o.remove(BUNDLED_HISTORY_KEY))
+        .and_then(|h| h.as_str().map(|s| s.to_string()));
+    let data = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
+    if let Some(old) = bundled {
+        // 削除後に記録された履歴は消さず、その前に削除前の履歴を戻す(同じものを二重に戻さない)
+        let hpath = dir.join(HISTORY_FILE);
+        let cur = fs::read_to_string(&hpath).unwrap_or_default();
+        if !old.is_empty() && !cur.starts_with(&old) {
+            let mut merged = old.clone();
+            if !merged.ends_with('\n') {
+                merged.push('\n');
+            }
+            merged.push_str(&cur);
+            atomic_write(&hpath, merged.as_bytes()).map_err(|e| e.to_string())?;
+        }
+    }
+    atomic_write(&dir.join(DATA_FILE), &data).map_err(|e| e.to_string())
+}
+
+/// すべてのデータを削除する前に、変更履歴も含めて「削除前の退避」を必ず作り、変更履歴を消す。
+/// data.json 自体は、この後に画面側が空の状態を保存して置き換える。
+#[tauri::command]
+fn wipe_all(app: tauri::AppHandle) -> Result<(), String> {
+    wipe_in_dir(&data_dir(&app)?, chrono::Local::now().naive_local())
+}
+
+fn wipe_in_dir(dir: &Path, now: chrono::NaiveDateTime) -> Result<(), String> {
+    let mut v: serde_json::Value = match fs::read(dir.join(DATA_FILE)) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(e.to_string()),
+    };
+    let hpath = dir.join(HISTORY_FILE);
+    let history = match fs::read_to_string(&hpath) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    v.as_object_mut()
+        .ok_or("データの形式が不正です")?
+        .insert(BUNDLED_HISTORY_KEY.into(), serde_json::Value::String(history));
+    let bdir = dir.join(BACKUP_DIR);
+    fs::create_dir_all(&bdir).map_err(|e| e.to_string())?;
+    let name = format!("data-{}{}.json", now.format("%Y-%m-%d_%H%M%S"), PRE_WIPE_SUFFIX);
+    let bytes = serde_json::to_vec(&v).map_err(|e| e.to_string())?;
+    atomic_write(&bdir.join(name), &bytes).map_err(|e| e.to_string())?;
+    match fs::remove_file(&hpath) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    File::open(dir).and_then(|d| d.sync_all()).map_err(|e| e.to_string())
 }
 
 /// JSON 取り込みの前に、現在のデータを「取り込み前」として退避する
@@ -288,6 +350,7 @@ pub fn run() {
             restore_backup,
             backup_before_import,
             append_history,
+            wipe_all,
             read_history
         ])
         .setup(|app| {
@@ -358,6 +421,31 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("\"n\":2") && lines[0].contains("08:01:00"));
         assert!(lines[1].contains("\"n\":1"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn wipe_bundles_history_and_restore_brings_it_back() {
+        let dir = std::env::temp_dir().join(format!("keiri-test-wipe-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let t = |s: &str| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").unwrap();
+        fs::write(dir.join(DATA_FILE), br#"{"transactions":[{"id":"tx_1"}]}"#).unwrap();
+        append_history_line(&dir.join(HISTORY_FILE), r#"{"action":"add"}"#, "A").unwrap();
+        wipe_in_dir(&dir, t("2026-09-28 09:00:00")).unwrap();
+        assert!(!dir.join(HISTORY_FILE).exists());
+        let names = list_backup_names(&dir.join(BACKUP_DIR));
+        assert_eq!(names, vec!["data-2026-09-28_090000-pre-wipe.json"]);
+        // 削除後に新しい記録が1件
+        fs::write(dir.join(DATA_FILE), br#"{"transactions":[]}"#).unwrap();
+        append_history_line(&dir.join(HISTORY_FILE), r#"{"action":"new"}"#, "B").unwrap();
+        let src = fs::read(dir.join(BACKUP_DIR).join(&names[0])).unwrap();
+        restore_into(&dir, &src).unwrap();
+        restore_into(&dir, &src).unwrap(); // 2回戻しても削除前の履歴は二重にならない
+        let data = fs::read_to_string(dir.join(DATA_FILE)).unwrap();
+        assert!(data.contains("tx_1") && !data.contains(BUNDLED_HISTORY_KEY));
+        let hist = read_history_lines(&dir.join(HISTORY_FILE), 10).unwrap();
+        assert_eq!(hist.len(), 2, "{:?}", hist);
+        assert!(hist[0].contains("new") && hist[1].contains("add"));
         fs::remove_dir_all(&dir).unwrap();
     }
 
