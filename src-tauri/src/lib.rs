@@ -472,10 +472,23 @@ pub fn run() {
                 && std::env::var("KEIRI_SELFTEST").is_ok()
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
             {
-                let _ = webview.eval(include_str!("selftest.js"));
+                let script = if std::env::var("KEIRI_SELFTEST").as_deref() == Ok("stress") {
+                    include_str!("selftest_stress.js")
+                } else {
+                    include_str!("selftest.js")
+                };
+                let _ = webview.eval(script);
             }
         })
         .setup(|app| {
+            // 開発ビルドの自己テスト中は、ウィンドウも Dock アイコンも出さない
+            if cfg!(debug_assertions) && std::env::var("KEIRI_SELFTEST").is_ok() {
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
             if let Err(e) = auto_backup(app.handle()) {
                 eprintln!("起動時のバックアップに失敗: {}", e);
             }

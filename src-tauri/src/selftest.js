@@ -12,7 +12,7 @@
     const back = await readReceiptBytes(id);
     const same = back.length === bytes.length && back.every(function (b, i) { return b === bytes[i]; });
     const url = await receiptUrl(id);
-    await report((same ? 'OK' : 'NG') + ' id=' + id + ' saved=' + bytes.length + ' read=' + back.length + ' mime=' + imageMime(back) + ' url=' + url.slice(0, 5));
+    await report((same ? 'OK' : 'NG') + ' storage=' + STORAGE_MODE + (STORAGE_ERROR ? '(' + STORAGE_ERROR + ')' : '') + ' tx=' + state.transactions.length + ' id=' + id + ' saved=' + bytes.length + ' read=' + back.length + ' mime=' + imageMime(back) + ' url=' + url.slice(0, 5));
   } catch (e) {
     await report('NG ' + (e && e.stage ? e.stage + ' ' : '') + (typeof e === 'string' ? e : (e && e.message)));
   }
