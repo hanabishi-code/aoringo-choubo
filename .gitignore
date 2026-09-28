@@ -1,3 +1,7 @@
 /src-tauri/target/
 /src-tauri/gen/
 .DS_Store
+
+# 写真(GPS などの位置情報を含むことがある)を誤ってコミットしない
+*.heic
+*.HEIC
