@@ -12,10 +12,19 @@ const PRE_WIPE_SUFFIX: &str = "-pre-wipe";
 /// 削除前の退避に変更履歴を同梱するときのキー(sanitizeBackup は未知のキーを無視する)
 const BUNDLED_HISTORY_KEY: &str = "_historyJsonl";
 const HISTORY_FILE: &str = "history.jsonl";
+const RECEIPTS_DIR: &str = "receipts";
+const MAX_RECEIPT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_HISTORY_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_DATA_BYTES: usize = 200 * 1024 * 1024;
 
 fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // 開発ビルドのみ: KEIRI_DATA_DIR で保存先を差し替えられる(自己テストで本物のデータに触れないため)
+    #[cfg(debug_assertions)]
+    if let Ok(d) = std::env::var("KEIRI_DATA_DIR") {
+        let dir = PathBuf::from(d);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        return Ok(dir);
+    }
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -61,11 +70,14 @@ fn save_data(app: tauri::AppHandle, json: String) -> Result<(), String> {
     atomic_write(&path, json.as_bytes()).map_err(|e| e.to_string())
 }
 
-/// 書き出し(CSV・バックアップ JSON)を「ダウンロード」フォルダに保存し、保存先のパスを返す。
-/// 同名ファイルがあれば上書きせず連番を付ける。
+/// 書き出し(CSV・バックアップ JSON)。Mac 標準の保存ダイアログを Rust 側で出し、
+/// ユーザーが選んだ場所にだけ書く。保存したファイル名を返し、キャンセルなら None(何も書かない)。
+/// 画面側は保存先を指定できない(ダイアログの初期ファイル名だけを渡す)。
+/// ダイアログの応答待ちでメインスレッドを止めないよう async コマンドにしている。
 #[tauri::command]
-fn export_file(app: tauri::AppHandle, filename: String, content: String) -> Result<String, String> {
-    // パス区切りや先頭のドットを除き、ファイル名だけを使う
+async fn export_file(app: tauri::AppHandle, filename: String, content: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    // パス区切りや先頭のドットを除き、ファイル名だけを初期値に使う
     let name: String = filename
         .chars()
         .filter(|c| !matches!(c, '/' | '\\' | ':' | '\0'))
@@ -75,19 +87,18 @@ fn export_file(app: tauri::AppHandle, filename: String, content: String) -> Resu
     if name.is_empty() || name.len() > 200 {
         return Err("ファイル名が不正です".into());
     }
-    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
-    let (stem, ext) = match name.rfind('.') {
-        Some(i) => (&name[..i], &name[i..]),
-        None => (name.as_str(), ""),
-    };
-    let mut path = dir.join(&name);
-    let mut n = 2;
-    while path.exists() {
-        path = dir.join(format!("{} ({}){}", stem, n, ext));
-        n += 1;
+    let mut dialog = app.dialog().file().set_file_name(&name);
+    if let Some(ext) = name.rsplit_once('.').map(|(_, e)| e.to_string()) {
+        let label = if ext.eq_ignore_ascii_case("csv") { "CSV" } else { "JSON" };
+        dialog = dialog.add_filter(label, &[ext.as_str()]);
     }
+    let Some(chosen) = dialog.blocking_save_file() else {
+        return Ok(None);
+    };
+    let path = chosen.into_path().map_err(|e| e.to_string())?;
+    // 既存ファイルへの上書きは、保存ダイアログでユーザーが確認済み
     atomic_write(&path, content.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
+    Ok(path.file_name().map(|n| n.to_string_lossy().into_owned()))
 }
 
 /* ---------- 自動バックアップ ---------- */
@@ -338,9 +349,108 @@ fn read_history(app: tauri::AppHandle, limit: usize) -> Result<Vec<String>, Stri
     read_history_lines(&data_dir(&app)?.join(HISTORY_FILE), limit.min(5000))
 }
 
+/* ---------- レシート画像 ---------- */
+
+/// 画像 ID は英数字・_・- のみ(パスとして解釈される文字を含めない)
+fn valid_receipt_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// 先頭のバイト列で JPEG / PNG を判定し、拡張子を返す
+fn image_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("png")
+    } else {
+        None
+    }
+}
+
+/// 新しい画像 ID を作る(時刻 + 連番。英数字と _ のみ)
+fn new_receipt_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("rc_{}_{}", nanos, SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+/// receipts/<新しいID>.jpg|png に保存し、ID を返す。画像は一度保存したら変えない
+fn save_receipt_in(dir: &Path, bytes: &[u8]) -> Result<String, String> {
+    if bytes.len() > MAX_RECEIPT_BYTES {
+        return Err("画像が大きすぎます".into());
+    }
+    let ext = image_ext(bytes).ok_or("JPEG / PNG 以外の画像は保存できません")?;
+    let rdir = dir.join(RECEIPTS_DIR);
+    fs::create_dir_all(&rdir).map_err(|e| e.to_string())?;
+    let mut id = new_receipt_id();
+    while find_receipt(&rdir, &id).is_some() {
+        id = new_receipt_id();
+    }
+    atomic_write(&rdir.join(format!("{}.{}", id, ext)), bytes).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+fn find_receipt(rdir: &Path, id: &str) -> Option<PathBuf> {
+    ["jpg", "png"]
+        .iter()
+        .map(|ext| rdir.join(format!("{}.{}", id, ext)))
+        .find(|p| p.exists())
+}
+
+/// 画像のバイト列を受け取って保存し、Rust 側で作った画像 ID を返す(ヘッダーは使わない)
+#[tauri::command]
+fn save_receipt(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    // 通常は画像のバイト列がそのまま届く。IPC が postMessage 方式に切り替わっていると数値の配列(JSON)で届く
+    let json_bytes;
+    let bytes: &[u8] = match request.body() {
+        tauri::ipc::InvokeBody::Raw(b) => b,
+        tauri::ipc::InvokeBody::Json(v) => {
+            json_bytes = serde_json::from_value::<Vec<u8>>(v.clone())
+                .map_err(|_| "画像データの形式が不正です(JSON)".to_string())?;
+            &json_bytes
+        }
+    };
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[debug] save_receipt body={} len={} headers={:?}",
+        if matches!(request.body(), tauri::ipc::InvokeBody::Raw(_)) { "Raw" } else { "Json" },
+        bytes.len(),
+        request.headers().keys().map(|k| k.as_str()).collect::<Vec<_>>()
+    );
+    save_receipt_in(&data_dir(&app)?, bytes)
+}
+
+/// 開発ビルドの自己テスト用: 結果を標準出力に出して終了する。リリースビルドでは何もしない
+#[tauri::command]
+fn selftest_report(app: tauri::AppHandle, msg: String) {
+    if cfg!(debug_assertions) && std::env::var("KEIRI_SELFTEST").is_ok() {
+        println!("[selftest] {}", msg);
+        app.exit(0);
+    }
+}
+
+#[tauri::command]
+fn read_receipt(app: tauri::AppHandle, id: String) -> Result<tauri::ipc::Response, String> {
+    if !valid_receipt_id(&id) {
+        return Err("画像 ID が不正です".into());
+    }
+    let path = find_receipt(&data_dir(&app)?.join(RECEIPTS_DIR), &id).ok_or("画像が見つかりません")?;
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             load_data,
             save_data,
@@ -351,8 +461,20 @@ pub fn run() {
             backup_before_import,
             append_history,
             wipe_all,
+            save_receipt,
+            read_receipt,
+            selftest_report,
             read_history
         ])
+        .on_page_load(|webview, payload| {
+            // 開発ビルドのみ: KEIRI_SELFTEST があれば、画面の JS からレシート保存・読み出しを実際に試す
+            if cfg!(debug_assertions)
+                && std::env::var("KEIRI_SELFTEST").is_ok()
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+            {
+                let _ = webview.eval(include_str!("selftest.js"));
+            }
+        })
         .setup(|app| {
             if let Err(e) = auto_backup(app.handle()) {
                 eprintln!("起動時のバックアップに失敗: {}", e);
@@ -446,6 +568,22 @@ mod tests {
         let hist = read_history_lines(&dir.join(HISTORY_FILE), 10).unwrap();
         assert_eq!(hist.len(), 2, "{:?}", hist);
         assert!(hist[0].contains("new") && hist[1].contains("add"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn receipts_validate_and_get_new_ids() {
+        let dir = std::env::temp_dir().join(format!("keiri-test-rc-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let jpg = [0xFF, 0xD8, 0xFF, 0xE0, 1];
+        let id1 = save_receipt_in(&dir, &jpg).unwrap();
+        let id2 = save_receipt_in(&dir, &jpg).unwrap();
+        assert_ne!(id1, id2);
+        assert!(valid_receipt_id(&id1));
+        assert_eq!(fs::read(dir.join(format!("receipts/{}.jpg", id1))).unwrap(), jpg);
+        assert!(save_receipt_in(&dir, b"<svg>").is_err());
+        assert!(save_receipt_in(&dir, &vec![0xFF; MAX_RECEIPT_BYTES + 1]).is_err());
+        assert!(!valid_receipt_id("../evil"));
         fs::remove_dir_all(&dir).unwrap();
     }
 

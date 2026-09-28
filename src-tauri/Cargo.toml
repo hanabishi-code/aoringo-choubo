@@ -16,3 +16,5 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# 書き出し先を Mac 標準の保存ダイアログで選ぶため(2026-09-28 ユーザー承認)。通信機能なし
+tauri-plugin-dialog = "2"
