@@ -3,6 +3,7 @@
 (async function () {
   function report(msg) { return window.__TAURI__.core.invoke('selftest_report', { msg: msg }); }
   try {
+    while (!APP_READY) await new Promise(function (r) { setTimeout(r, 50); }); // 起動時の読み込みと履歴の後始末を待つ
     const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 48;
     const ctx = canvas.getContext('2d'); ctx.fillStyle = '#b33f2e'; ctx.fillRect(0, 0, 64, 48);
     const png = await new Promise(function (r) { canvas.toBlob(r, 'image/png'); });

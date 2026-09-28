@@ -264,16 +264,52 @@ function persist() {
 async function persistOrWarn(okMsg) {
   try { await persist(); if (okMsg) toast(okMsg); return true; } catch (e) { toast('保存に失敗しました'); return false; }
 }
-// 変更履歴(追記専用ログ)。保存に成功した変更だけを記録する
-function logChange(action, target, before, after, extra) {
-  if (STORAGE_MODE !== 'file') return;
-  const entry = Object.assign({ action: action, target: target }, extra || {});
+// 変更履歴(追記専用ログ)。保存の「前」に保留(status: pending)として書き、保存できたら完了(done)を追記する。
+// 強制終了で完了を書けなかった保留は、次の起動時にデータと照らし合わせて done / aborted を追記する(recoverPendingHistory)。
+// こうすると「保存されたのに履歴がない」ことが起きない
+function appendHistory(entry) { return invoke('append_history', { entry: JSON.stringify(entry) }); }
+async function logBegin(action, target, before, after, extra) {
+  if (STORAGE_MODE !== 'file') return null;
+  const entry = Object.assign({ hid: uid('h'), status: 'pending', action: action, target: target }, extra || {});
   if (before !== undefined) entry.before = before;
   if (after !== undefined) entry.after = after;
-  invoke('append_history', { entry: JSON.stringify(entry) }).catch(function () { toast('変更履歴の記録に失敗しました'); });
+  try { await appendHistory(entry); return entry.hid; } catch (e) { toast('変更履歴の記録に失敗しました'); return null; }
+}
+function logEnd(hid, ok) {
+  if (!hid) return;
+  appendHistory({ status: ok ? 'done' : 'aborted', ref: hid }).catch(function () { toast('変更履歴の記録に失敗しました'); });
 }
 async function saveAndLog(action, target, before, after, okMsg, extra) {
-  if (await persistOrWarn(okMsg)) logChange(action, target, before, after, extra);
+  const hid = await logBegin(action, target, before, after, extra);
+  logEnd(hid, await persistOrWarn(okMsg));
+}
+// 保留のままの変更が、読み込んだデータに反映されているか
+const HISTORY_LISTS = { transaction: 'transactions', invoice: 'invoices', fixedAsset: 'fixedAssets' };
+function historyApplied(e) {
+  const same = function (a, b) { return JSON.stringify(a) === JSON.stringify(b); };
+  if (HISTORY_LISTS[e.target]) {
+    const rec = e.after || e.before || {};
+    const cur = findById(state[HISTORY_LISTS[e.target]], rec.id);
+    if (e.action === 'delete') return !cur;
+    if (!cur) return false;
+    if (e.action === 'add') return true;
+    // 修正: 変わった項目が修正後の値になっていれば反映済み
+    return Object.keys(Object.assign({}, e.before, e.after)).every(function (k) { return same((e.before || {})[k], (e.after || {})[k]) || same(cur[k], (e.after || {})[k]); });
+  }
+  if (e.target === 'inventory') return same(state.inventoryYearEnd[e.year], e.after);
+  if (e.target === 'settings') return Object.keys(e.after || {}).every(function (k) { return same(state.settings[k], e.after[k]); });
+  if (e.target === 'all' && e.after) return e.after.transactions === state.transactions.length && e.after.invoices === state.invoices.length && e.after.fixedAssets === state.fixedAssets.length;
+  return false;
+}
+async function recoverPendingHistory() {
+  if (STORAGE_MODE !== 'file') return;
+  let lines; try { lines = await invoke('read_history', { limit: 5000 }); } catch (e) { return; }
+  const resolved = new Set(); const pending = [];
+  lines.forEach(function (l) { let e; try { e = JSON.parse(l); } catch (x) { return; } if (e.ref) resolved.add(e.ref); else if (e.status === 'pending' && e.hid) pending.push(e); });
+  for (const e of pending) {
+    if (resolved.has(e.hid)) continue;
+    try { await appendHistory({ status: historyApplied(e) ? 'done' : 'aborted', ref: e.hid, recovered: true }); } catch (x) {}
+  }
 }
 function findById(list, id) { return list.find(function (x) { return x.id === id; }); }
 
@@ -1265,8 +1301,11 @@ function historyDiff(e) {
 }
 async function openHistoryModal() {
   let lines;
-  try { lines = await invoke('read_history', { limit: 300 }); } catch (e) { toast('変更履歴を読み込めませんでした'); return; }
-  const rows = lines.map(function (l) { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean).map(function (e) {
+  try { lines = await invoke('read_history', { limit: 1000 }); } catch (e) { toast('変更履歴を読み込めませんでした'); return; }
+  const parsed = lines.map(function (l) { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+  // 完了・取り消しの印(ref)を集め、完了した変更(と印の仕組みより前の記録)だけを表示する
+  const statusOf = {}; parsed.forEach(function (e) { if (e.ref) statusOf[e.ref] = e.status; });
+  const rows = parsed.filter(function (e) { return !e.ref && (e.status !== 'pending' || statusOf[e.hid] === 'done'); }).slice(0, 300).map(function (e) {
     const at = typeof e.at === 'string' ? e.at.slice(0, 19).replace('T', ' ') : '';
     return '<div class="tx-row" style="display:block;">' +
       '<div style="font-size:12px;" class="muted">' + esc(at) + '</div>' +
@@ -1300,13 +1339,15 @@ async function restoreFromBackup(name) {
   const count = function (a) { return Array.isArray(a) ? a.length : 0; };
   const msg = backupLabel(name) + ' の状態に戻します(取引 ' + count(data.transactions) + ' 件・請求書 ' + count(data.invoices) + ' 件・固定資産 ' + count(data.fixedAssets) + ' 件)' + (/-pre-wipe\.json$/.test(name) ? '。削除前の変更履歴も戻します' : '') + '。現在のデータは退避されます。よろしいですか?';
   if (!(await confirmDialog(msg, '復元する'))) return;
+  const before = { transactions: state.transactions.length, invoices: state.invoices.length, fixedAssets: state.fixedAssets.length };
+  let hid = null;
   try {
     await saveChain; // 保存待ちの変更を書き終えてから退避・復元する
+    hid = await logBegin('restore', 'all', before, { transactions: count(data.transactions), invoices: count(data.invoices), fixedAssets: count(data.fixedAssets) }, { backup: name });
     await invoke('restore_backup', { name: name });
-  } catch (e) { toast('復元に失敗しました'); return; }
-  const before = { transactions: state.transactions.length, invoices: state.invoices.length, fixedAssets: state.fixedAssets.length };
+  } catch (e) { logEnd(hid, false); toast('復元に失敗しました'); return; }
+  logEnd(hid, true);
   await Store.loadAll();
-  logChange('restore', 'all', before, { transactions: state.transactions.length, invoices: state.invoices.length, fixedAssets: state.fixedAssets.length }, { backup: name });
   toast('復元しました'); renderShell();
 }
 async function onWipeAll() {
@@ -1322,8 +1363,11 @@ async function onWipeAll() {
 }
 
 /* ============================== 初期化 ============================== */
+let APP_READY = false; // 起動時の読み込みと履歴の後始末が終わったら true(開発ビルドの自己テストが待つ)
 async function init() {
   await Store.loadAll();
+  await recoverPendingHistory();
   renderShell();
+  APP_READY = true;
 }
 document.addEventListener('DOMContentLoaded', init);
