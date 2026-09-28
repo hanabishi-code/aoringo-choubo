@@ -1,6 +1,7 @@
 # 経理ノート — Claude Code 向け作業指示
 
-個人事業主向けの複式簿記アプリ。現在は `index.html` 1ファイル(HTML/CSS/JS)。
+個人事業主向けの複式簿記アプリ。画面は `src/`(index.html / styles.css / app.js)、Mac アプリ側は `src-tauri/`(Tauri v2・Rust)。
+旧ブラウザ版は `legacy/index.html`(ブラウザで開いてもアプリにはならない)。
 目標は **Mac用オフラインデスクトップアプリ(Tauri v2)として GitHub で公開**すること。
 
 ## 決定事項(変更する場合は必ず先に確認すること)
@@ -12,21 +13,22 @@
 - Apple の署名・公証は当面しない(未署名で配布、README に開き方を記載)
 - 税務の正確性は保証しない旨を免責として明記する
 
-## 現状(第1段階 完了済み)
-- Google Fonts 削除(システムフォント)、CSP 追加
-- Claude 専用の保存機能(`window.claude` / dbモード / assets / downloads)は無効化済み。
-  コードは残っているので、第2段階で `Store` を書き換える際に削除する
-- バックアップ復元時の検証 `sanitizeBackup()` を追加(型・ID・不正キー・版数)
-- バックアップ JSON に `app: 'keiri-note'`, `schemaVersion: 1` を付与
-- 7日以上バックアップがないと警告を表示
-- レシート画像機能はオフライン版では非表示(第2段階で復活させる)
+## 現状(第2段階 完了済み・2026-09-29)
+- 保存先 `~/Library/Application Support/com.keirinote.desktop/`:
+  `data.json`(本体)、`history.jsonl`(変更履歴・追記専用)、`backups/`(自動バックアップ・各種退避)、`receipts/`(レシート画像)
+- 書き込みは Rust 側で原子的(一時ファイル → fsync → rename)。書き出しは Rust 側の保存ダイアログで選んだ場所のみ
+- 依存: chrono(日付)、tauri-plugin-dialog(保存ダイアログ)。いずれもユーザー承認済み・通信なし
+- 開発ビルドの起動: `src-tauri/target/debug/keiri-note`(`cargo build` 後)。
+  自己テスト: `KEIRI_SELFTEST=1`(画像保存)/ `KEIRI_SELFTEST=stress`(強制終了テスト用)+ `KEIRI_DATA_DIR=<一時フォルダ>`。開発ビルドのみ有効
+- テスト: `cargo test`(src-tauri)、`osascript -l JavaScript tests/check_import.js`、`tests/check_receipt_ipc.js`
 
-## データモデル(schemaVersion 1)
+## データモデル(schemaVersion 2)
 - `transactions[]`: id, kind(KIND_LABELS のキー), date, amount, memo, fund, 勘定科目関連, receiptAssetId?
 - `invoices[]`: id, number, issueDate, dueDate, clientName, clientAddress, items[{name, qty, unitPrice}], taxRate, notes, status
 - `fixedAssets[]`: id, name, acquisitionDate, cost, usefulLifeYears, disposalDate
 - `inventoryYearEnd{ "YYYY": {opening, closing} }`
 - `settings`: `defaultSettings()` のキーのみ
+- バックアップ JSON のみ: `receipts{ 画像ID: base64 }`(v2 で追加。v1 からは `migrateBackup()` で移行)
 データ形式を変える場合は schemaVersion を上げ、旧版からの移行関数を必ず書くこと。
 
 ## 第2段階: Mac アプリ化(完了条件つき)
@@ -40,11 +42,12 @@
 7. レシート画像: `receipts/` にファイル保存。バックアップにも含める
 
 完了条件:
-- [ ] ネットワークを切った状態で全機能が動く
-- [ ] アプリを強制終了してもデータが壊れない(書き込み中に kill して確認)
+- [x] ネットワークを切った状態で全機能が動く(2026-09-29 ユーザー確認)
+- [x] アプリを強制終了してもデータが壊れない(kill -9 を計45回。変更履歴の1行欠落は第3段階で修正)
 - [ ] Time Machine 対象フォルダにデータとバックアップがある
-- [ ] 旧版の JSON を取り込むと件数・金額合計が一致する
-- [ ] 不正な JSON を取り込んでも画面が壊れない
+      → アプリ側は完了(データ・backups・receipts は tmutil で Included)。Time Machine の設定待ち
+- [x] 旧版の JSON を取り込むと件数・金額合計が一致する(テスト用ファイルで確認)
+- [x] 不正な JSON を取り込んでも画面が壊れない
 
 ## 第3段階: 公開準備
 - 計算ロジック(損益計算・減価償却・貸借対照表)のテスト
