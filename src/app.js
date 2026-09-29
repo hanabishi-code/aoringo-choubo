@@ -21,7 +21,8 @@ const ACCOUNTS = {
 };
 const KIND_LABELS = {
   income: '収入', expense: '経費', purchase: '仕入(現金)', drawing: '事業主貸(出金)', contribution: '事業主借(入金)',
-  expense_accrued: '未払計上', pay_liability: '買掛金・未払金の支払', borrow: '借入金の受取', repay: '借入金の返済(元本)'
+  expense_accrued: '未払計上', pay_liability: '買掛金・未払金の支払', borrow: '借入金の受取', repay: '借入金の返済(元本)',
+  asset_purchase: '固定資産の購入' // 固定資産台帳の登録から自動で作る(入力画面の区分には出さない)
 };
 const TABS = [
   { id: 'entry', label: '入力' }, { id: 'journal', label: '仕訳帳' }, { id: 'ledger', label: '総勘定元帳' },
@@ -75,6 +76,7 @@ function movementsOf(tx) {
   if (tx.kind === 'pay_liability') return [{ node: 'liability:' + tx.liability, side: 'debit', amt: amt }, { node: 'fund:' + tx.fund, side: 'credit', amt: amt }];
   if (tx.kind === 'borrow') return [{ node: 'fund:' + tx.fund, side: 'debit', amt: amt }, { node: 'liability:loan', side: 'credit', amt: amt }];
   if (tx.kind === 'repay') return [{ node: 'liability:loan', side: 'debit', amt: amt }, { node: 'fund:' + tx.fund, side: 'credit', amt: amt }];
+  if (tx.kind === 'asset_purchase') return [{ node: 'asset:fixed', side: 'debit', amt: amt }, { node: 'fund:' + tx.fund, side: 'credit', amt: amt }];
   return [];
 }
 function nodeLabel(node) {
@@ -85,6 +87,7 @@ function nodeLabel(node) {
   if (type === 'expense') return accountLabel('expense', key);
   if (type === 'liability') return accountLabel('liability', key);
   if (type === 'equity') return key === 'drawing' ? '事業主貸' : '事業主借';
+  if (type === 'asset') return '固定資産';
   return node;
 }
 function journalOf(tx) {
@@ -112,7 +115,7 @@ function primaryLabel(t) {
 }
 function txSign(t) {
   if (['income', 'contribution', 'borrow'].indexOf(t.kind) >= 0) return '+';
-  if (['expense', 'purchase', 'drawing', 'repay', 'pay_liability'].indexOf(t.kind) >= 0) return '−';
+  if (['expense', 'purchase', 'drawing', 'repay', 'pay_liability', 'asset_purchase'].indexOf(t.kind) >= 0) return '−';
   return '';
 }
 function fundBalance(fundKey, asOfDate) {
@@ -681,7 +684,7 @@ function txRowHtml(t) {
   return (
     '<div class="tx-row">' + (t.receiptAssetId ? '<div class="tx-thumb" data-receipt-open="' + esc(t.receiptAssetId) + '"><img data-receipt="' + esc(t.receiptAssetId) + '" alt=""></div>' : '<div class="tx-thumb"></div>') +
       '<div class="tx-main"><div class="tx-top"><span class="tx-cat">' + esc(label) + '</span><span class="tx-amt num ' + cls + '">' + sign + yen(t.amount) + '</span></div>' +
-      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + (t.linkedAssetId ? '<span class="tag">固定資産の売却</span> ' : '') + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
+      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + (t.linkedAssetId && t.kind === 'contribution' ? '<span class="tag">固定資産の売却</span> ' : '') + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
       '<div class="tx-actions"><a data-edit-tx=\"' + esc(t.id) + '\">編集</a><a data-del-tx=\"' + esc(t.id) + '\" style="color:var(--danger);">削除</a></div></div></div>'
   );
 }
@@ -748,6 +751,11 @@ function assetFormHtml(a) {
     '<div class="field"><label>資産名</label><input type="text" id="af-name" value="' + esc(a.name) + '" placeholder="例:ノートパソコン"></div>' +
     '<div class="field-row"><div class="field"><label>取得日</label><input type="date" id="af-date" value="' + esc(a.acquisitionDate) + '"></div>' +
     '<div class="field"><label>取得価額(円)</label><input type="number" id="af-cost" value="' + esc(a.cost) + '"></div></div>' +
+    '<div class="field"><label>支払い方法</label><select id="af-pay">' +
+      (a.id && !a.payFund ? '<option value="" selected>記録しない(登録済みの資産)</option>' : '') +
+      '<option value="cash"' + (a.payFund === 'cash' ? ' selected' : '') + '>現金</option>' +
+      '<option value="bank"' + (a.payFund === 'bank' || (!a.id && !a.payFund) ? ' selected' : '') + '>普通預金</option></select>' +
+      '<div class="note" style="margin-top:6px;">保存すると、支払いの仕訳(固定資産/支払い方法)を自動で作ります。取得日・取得価額・支払い方法を直すと仕訳も直ります。</div></div>' +
     '<div class="field-row"><div class="field"><label>耐用年数(年・2〜50)</label><input type="number" id="af-life" min="2" max="50" step="1" value="' + esc(a.usefulLifeYears) + '"></div>' +
     '<div class="field"><label>除却・売却日(任意)</label><input type="date" id="af-disposal" value="' + esc(a.disposalDate || '') + '"></div></div>' +
     '<div class="field"><label>処分の種類</label><div class="radio-group">' +
@@ -772,6 +780,7 @@ function openAssetModal(asset) {
   }); });
   document.getElementById('af-save').addEventListener('click', async function () {
     const doc = { name: val('af-name'), acquisitionDate: val('af-date'), cost: Number(val('af-cost')) || 0, usefulLifeYears: Number(val('af-life')), disposalDate: val('af-disposal') || null };
+    const pay = val('af-pay'); doc.payFund = (pay === 'cash' || pay === 'bank') ? pay : undefined;
     if (doc.disposalDate) {
       doc.disposalType = dtype();
       if (doc.disposalType === 'sale') { doc.saleAmount = Number(val('af-sale-amount')) || 0; doc.saleFund = val('af-sale-fund') === 'cash' ? 'cash' : 'bank'; }
@@ -782,12 +791,21 @@ function openAssetModal(asset) {
     if (doc.disposalType === 'sale' && doc.saleAmount < 0) { toast('売却代金を確認してください'); return; }
     if (!isValidUsefulLife(doc.usefulLifeYears)) { toast('耐用年数は 2〜50 年の整数で入力してください(償却率表にある範囲です)', 6000); document.getElementById('af-life').focus(); return; }
     const saved = editingAssetId ? await Store.updateFixedAsset(editingAssetId, doc) : await Store.addFixedAsset(doc);
-    if (saved) await syncSaleTransaction(saved);
+    if (saved) { await syncPurchaseTransaction(saved); await syncSaleTransaction(saved); }
     closeModal(); renderShell();
   });
 }
 // 売却代金は「事業主借(入金)」の取引として自動で作り、固定資産と連動させる(linkedAssetId)
-function linkedSaleTx(assetId) { return state.transactions.find(function (t) { return t.linkedAssetId === assetId; }); }
+function linkedSaleTx(assetId) { return state.transactions.find(function (t) { return t.linkedAssetId === assetId && t.kind === 'contribution'; }); }
+function linkedPurchaseTx(assetId) { return state.transactions.find(function (t) { return t.linkedAssetId === assetId && t.kind === 'asset_purchase'; }); }
+function linkedTxs(assetId) { return state.transactions.filter(function (t) { return t.linkedAssetId === assetId; }); }
+// 購入代金の支払いは「固定資産の購入」(借方 固定資産 / 貸方 現金・普通預金)の取引として自動で作り、台帳と連動させる
+async function syncPurchaseTransaction(asset) {
+  const linked = linkedPurchaseTx(asset.id);
+  if (!asset.payFund) { if (linked) await Store.deleteTransaction(linked.id); return; }
+  const payload = { kind: 'asset_purchase', date: asset.acquisitionDate, amount: Number(asset.cost) || 0, fund: asset.payFund, memo: '固定資産の購入(' + asset.name + ')', linkedAssetId: asset.id };
+  if (linked) await Store.updateTransaction(linked.id, payload); else await Store.addTransaction(payload);
+}
 async function syncSaleTransaction(asset) {
   const linked = linkedSaleTx(asset.id);
   if (!(asset.disposalDate && isSale(asset) && asset.saleAmount > 0)) { if (linked) await Store.deleteTransaction(linked.id); return; }
@@ -1080,7 +1098,7 @@ function bindViewEvents() {
     const cancelBtn = document.getElementById('cancel-edit');
     if (cancelBtn) cancelBtn.addEventListener('click', function () { editingTxId = null; renderView(); });
   }
-  const linkedNotice = function (id) { const t = findById(state.transactions, id); if (t && t.linkedAssetId) { toast('この取引は固定資産の売却から自動で作られています。固定資産台帳(資産・負債タブ)で変更してください', 6000); return true; } return false; };
+  const linkedNotice = function (id) { const t = findById(state.transactions, id); if (t && t.linkedAssetId) { toast('この取引は固定資産台帳から自動で作られています。資産・負債タブの固定資産台帳で変更してください', 6000); return true; } return false; };
   document.querySelectorAll('[data-edit-tx]').forEach(function (a) { a.addEventListener('click', function () { if (linkedNotice(a.dataset.editTx)) return; editingTxId = a.dataset.editTx; renderView(); window.scrollTo(0, 0); }); });
   document.querySelectorAll('[data-del-tx]').forEach(function (a) { a.addEventListener('click', async function () { if (linkedNotice(a.dataset.delTx)) return; if (!(await confirmDialog('この取引を削除しますか?', '削除する'))) return; await Store.deleteTransaction(a.dataset.delTx); renderShell(); }); });
 
@@ -1096,7 +1114,7 @@ function bindViewEvents() {
   const assetsYearSel = document.getElementById('assets-year'); if (assetsYearSel) assetsYearSel.addEventListener('change', function () { window.__assetsYear = Number(assetsYearSel.value); renderView(); });
   const newAsset = document.getElementById('new-asset'); if (newAsset) newAsset.addEventListener('click', function () { openAssetModal(null); });
   document.querySelectorAll('[data-edit-asset]').forEach(function (a) { a.addEventListener('click', function () { openAssetModal(state.fixedAssets.find(function (x) { return x.id === a.dataset.editAsset; })); }); });
-  document.querySelectorAll('[data-del-asset]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この固定資産を削除しますか?' + (linkedSaleTx(a.dataset.delAsset) ? '(自動で作った売却代金の取引も削除します)' : ''), '削除する'))) return; const lt = linkedSaleTx(a.dataset.delAsset); if (lt) await Store.deleteTransaction(lt.id); await Store.deleteFixedAsset(a.dataset.delAsset); renderShell(); }); });
+  document.querySelectorAll('[data-del-asset]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この固定資産を削除しますか?' + (linkedTxs(a.dataset.delAsset).length ? '(自動で作った購入・売却代金の取引も削除します)' : ''), '削除する'))) return; for (const lt of linkedTxs(a.dataset.delAsset)) await Store.deleteTransaction(lt.id); await Store.deleteFixedAsset(a.dataset.delAsset); renderShell(); }); });
   const newInvYear = document.getElementById('new-inv-year'); if (newInvYear) newInvYear.addEventListener('click', function () { openInvYearModal(null); });
   document.querySelectorAll('[data-edit-inv-year]').forEach(function (a) { a.addEventListener('click', function () { openInvYearModal(Number(a.dataset.editInvYear)); }); });
 
@@ -1238,7 +1256,7 @@ async function exportBackup() {
   if (ok && missing) toast('見つからない画像が ' + missing + ' 枚ありました(それ以外は書き出しました)');
 }
 /* ============================== バックアップの検証 ============================== */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+\/]*={0,2}$/;
 // 旧版のデータを現在の形式に移行する。版ごとに1段ずつ上げる
@@ -1258,6 +1276,11 @@ function migrateBackup(raw) {
       return a;
     });
     v = 3;
+  }
+  if (v < 4) {
+    // v3 → v4: 取引の区分に「固定資産の購入」(asset_purchase)と、固定資産に支払い方法(payFund)を追加。
+    // 既存の固定資産は支払いが記録されていないため、payFund なしのまま(画面で設定できる)
+    v = 4;
   }
   out.schemaVersion = v;
   return out;
@@ -1316,6 +1339,7 @@ function sanitizeBackup(raw) {
     if (a.disposalType !== undefined && a.disposalType !== 'retire' && a.disposalType !== 'sale') delete a.disposalType;
     if (a.disposalDate && !a.disposalType) a.disposalType = 'retire';
     if (a.saleFund !== undefined && a.saleFund !== 'cash' && a.saleFund !== 'bank') delete a.saleFund;
+    if (a.payFund !== undefined && a.payFund !== 'cash' && a.payFund !== 'bank') delete a.payFund;
   });
   if (raw.inventoryYearEnd && typeof raw.inventoryYearEnd === 'object') {
     out.inventoryYearEnd = {};
@@ -1388,7 +1412,7 @@ const HISTORY_TARGETS = { transaction: '取引', invoice: '請求書', fixedAsse
 const HISTORY_FIELD_LABELS = { kind: '種類', date: '日付', amount: '金額', memo: 'メモ', fund: '入出金', account: '勘定科目', liability: '負債科目', accountType: '科目区分',
   number: '請求書番号', issueDate: '発行日', dueDate: '支払期限', clientName: '取引先', clientAddress: '取引先住所', items: '明細', taxRate: '税率', notes: '備考', status: '状態',
   name: '名称', acquisitionDate: '取得日', cost: '取得価額', usefulLifeYears: '耐用年数', disposalDate: '除却日', opening: '期首棚卸高', closing: '期末棚卸高',
-  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', receiptAssetId: 'レシート画像' };
+  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', payFund: '支払い方法', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', receiptAssetId: 'レシート画像' };
 function historySummary(e) {
   const d = e.after || e.before || {};
   if (e.target === 'transaction') return (d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.memo ? ' ' + d.memo : '');

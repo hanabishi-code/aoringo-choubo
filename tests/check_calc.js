@@ -6,7 +6,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION, syncPurchaseTransaction: syncPurchaseTransaction };'))(document, window, localStorage);
 
 var results = [];
 function check(name, actual, expected, note) {
@@ -114,7 +114,7 @@ var bad = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 3,
 var c = bad.fixedAssets[0];
 check('取り込み: 不正な処分の種類は除却に/不正な受け取り先は外す/売却代金は数値に', [c.disposalType, c.saleFund === undefined, c.saleAmount], ['retire', true, 0]);
 check('取り込み: 不正な linkedAssetId は外す', bad.transactions[0].linkedAssetId === undefined, true);
-check('SCHEMA_VERSION は 3', app.SCHEMA_VERSION, 3);
+check('SCHEMA_VERSION は 4', app.SCHEMA_VERSION, 4);
 
 /* ---------- 4. 損益計算書 ---------- */
 reset({ openingCash: 100000, openingBank: 500000, openingDate: '2025-01-01' });
@@ -141,12 +141,26 @@ check('貸借対照表 2025末: 現金・預金・棚卸・負債合計', [bs.ca
 check('貸借対照表 2025末: 資産合計 = 負債 + 純資産', bs.assetsTotal, bs.liabilitiesTotal + bs.equityTotalVal);
 check('貸借対照表の繰越利益 = 損益計算書の所得(2025)', bs.retainedEarnings, app.computePL(2025).net);
 
-/* ---------- 6. 固定資産を買った年も、繰越利益 = 所得 になるか ---------- */
+/* ---------- 6. 固定資産を買った年も、繰越利益 = 所得 になるか(支払いは「固定資産の購入」の取引) ---------- */
 reset({ openingCash: 0, openingBank: 1000000, openingDate: '2025-01-01' });
-app.state.fixedAssets.push({ id: 'fa_2', name: 'PC', cost: 240000, usefulLifeYears: 4, acquisitionDate: '2025-04-10', disposalDate: '' });
-// PC の代金 240,000円を預金から払った。アプリには固定資産の購入代金を記録する取引種類がないため、支払いは記録できない
+var pc = { id: 'fa_2', name: 'PC', cost: 240000, usefulLifeYears: 4, acquisitionDate: '2025-04-10', disposalDate: '', payFund: 'bank' };
+app.state.fixedAssets.push(pc);
+app.syncPurchaseTransaction(pc); // 画面で台帳に登録して保存したときと同じ処理
+var ptx = app.state.transactions.filter(function (t) { return t.linkedAssetId === 'fa_2'; });
+check('購入: 台帳の登録で「固定資産の購入」の取引が1件できる(預金から 240,000)', ptx.map(function (t) { return [t.kind, t.fund, t.amount, t.date]; }), [['asset_purchase', 'bank', 240000, '2025-04-10']]);
+var m = app.movementsOf(ptx[0]);
+check('購入: 仕訳は 借方 固定資産 / 貸方 普通預金', m.map(function (x) { return x.side + ':' + x.node; }), ['debit:asset:fixed', 'credit:fund:bank']);
 var bs2 = app.computeBS('2025-12-31'), pl2 = app.computePL(2025);
-check('固定資産を買った年の繰越利益 = 所得(−45,000)', bs2.retainedEarnings, pl2.net,
-  '固定資産の購入代金の支払いを記録する取引種類がなく、預金が減らないため、純資産が 240,000円多くなる');
+// 償却 2025年 9か月 = 45,000 → 所得 −45,000、預金 760,000、固定資産 195,000
+check('購入: 2025年末の預金・固定資産の簿価', [bs2.bank, bs2.fixedAssetsVal], [760000, 195000]);
+check('購入: 繰越利益 = 所得(−45,000)', bs2.retainedEarnings, pl2.net);
+// 台帳を直すと仕訳も直る
+pc.cost = 300000; pc.payFund = 'cash'; pc.acquisitionDate = '2025-05-01';
+app.syncPurchaseTransaction(pc);
+ptx = app.state.transactions.filter(function (t) { return t.linkedAssetId === 'fa_2'; });
+check('購入: 金額・日付・支払い方法を直すと仕訳も追随', ptx.map(function (t) { return [t.fund, t.amount, t.date]; }), [['cash', 300000, '2025-05-01']]);
+// 支払い方法を「記録しない」にすると仕訳は消える
+pc.payFund = undefined; app.syncPurchaseTransaction(pc);
+check('購入: 支払いを記録しない → 連動する仕訳は削除', app.state.transactions.filter(function (t) { return t.linkedAssetId === 'fa_2'; }).length, 0);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';
