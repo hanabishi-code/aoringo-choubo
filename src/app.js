@@ -150,6 +150,8 @@ const STRAIGHT_LINE_RATES = {
   31: 0.033, 32: 0.032, 33: 0.031, 34: 0.030, 35: 0.029, 36: 0.028, 37: 0.028, 38: 0.027, 39: 0.026, 40: 0.025,
   41: 0.025, 42: 0.024, 43: 0.024, 44: 0.023, 45: 0.023, 46: 0.022, 47: 0.022, 48: 0.021, 49: 0.021, 50: 0.020
 };
+// 入力できる耐用年数は償却率表にある 2〜50 年の整数だけ
+function isValidUsefulLife(n) { return Number.isInteger(n) && Object.prototype.hasOwnProperty.call(STRAIGHT_LINE_RATES, n); }
 // 年間の償却費 = 取得価額 × 償却率。表にない耐用年数(1年・51年以上)は (取得価額 − 1) ÷ 耐用年数 で計算する
 function annualStraightLine(cost, life) {
   const rate = STRAIGHT_LINE_RATES[life];
@@ -710,7 +712,7 @@ function assetFormHtml(a) {
     '<div class="field"><label>資産名</label><input type="text" id="af-name" value="' + esc(a.name) + '" placeholder="例:ノートパソコン"></div>' +
     '<div class="field-row"><div class="field"><label>取得日</label><input type="date" id="af-date" value="' + esc(a.acquisitionDate) + '"></div>' +
     '<div class="field"><label>取得価額(円)</label><input type="number" id="af-cost" value="' + esc(a.cost) + '"></div></div>' +
-    '<div class="field-row"><div class="field"><label>耐用年数(年)</label><input type="number" id="af-life" value="' + esc(a.usefulLifeYears) + '"></div>' +
+    '<div class="field-row"><div class="field"><label>耐用年数(年・2〜50)</label><input type="number" id="af-life" min="2" max="50" step="1" value="' + esc(a.usefulLifeYears) + '"></div>' +
     '<div class="field"><label>除却・売却日(任意)</label><input type="date" id="af-disposal" value="' + esc(a.disposalDate || '') + '"></div></div>' +
     '<div class="note">定額法(残存価額1円・月割償却)で自動計算します。耐用年数は国税庁の「耐用年数表」でご確認ください。</div>' +
     '<button type="button" class="btn block" id="af-save">保存する</button>'
@@ -720,8 +722,9 @@ function openAssetModal(asset) {
   editingAssetId = asset ? asset.id : null;
   openModal(asset ? '固定資産を編集' : '固定資産を登録', assetFormHtml(asset));
   document.getElementById('af-save').addEventListener('click', async function () {
-    const doc = { name: val('af-name'), acquisitionDate: val('af-date'), cost: Number(val('af-cost')) || 0, usefulLifeYears: Number(val('af-life')) || 1, disposalDate: val('af-disposal') || null };
+    const doc = { name: val('af-name'), acquisitionDate: val('af-date'), cost: Number(val('af-cost')) || 0, usefulLifeYears: Number(val('af-life')), disposalDate: val('af-disposal') || null };
     if (!doc.name || !doc.acquisitionDate || doc.cost <= 0) { toast('必須項目を入力してください'); return; }
+    if (!isValidUsefulLife(doc.usefulLifeYears)) { toast('耐用年数は 2〜50 年の整数で入力してください(償却率表にある範囲です)', 6000); document.getElementById('af-life').focus(); return; }
     if (editingAssetId) await Store.updateFixedAsset(editingAssetId, doc); else await Store.addFixedAsset(doc);
     closeModal(); renderShell();
   });

@@ -6,7 +6,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife };'))(document, window, localStorage);
 
 var results = [];
 function check(name, actual, expected, note) {
@@ -69,6 +69,9 @@ app.state.settings = Object.assign(app.defaultSettings(), { depreciationRounding
 check('端数処理「round」: 13,916.66… → 13,917', amounts({ cost: 500000, usefulLifeYears: 6, acquisitionDate: '2025-11-01', disposalDate: '' }, [2025]), [13917]);
 app.state.settings = app.defaultSettings();
 check('端数処理の初期値は切り捨て', app.defaultSettings().depreciationRounding, 'floor');
+
+// 入力できる耐用年数は 2〜50 年の整数だけ
+check('耐用年数の入力チェック(1, 2, 50, 51, 2.5, NaN)', [1, 2, 50, 51, 2.5, NaN].map(app.isValidUsefulLife), [false, true, true, false, false, false]);
 
 /* ---------- 3. 除却した固定資産は、除却後の貸借対照表に残らない ---------- */
 reset({ openingDate: '2025-01-01' });
