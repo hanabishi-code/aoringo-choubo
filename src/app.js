@@ -874,7 +874,7 @@ function viewAssets() {
     '</section>' +
     '<section class="block"><h2>負債残高(本日時点)</h2>' +
       '<div class="table-scroll"><table class="ledger"><tr><th>科目</th><th class="num">残高</th></tr>' +
-        '<tr><td>買掛金</td><td class="num">' + yen(liab.payable) + '</td></tr><tr><td>未払金</td><td class="num">' + yen(liab.accrued) + '</td></tr><tr><td>借入金</td><td class="num">' + yen(liab.loan) + '</td></tr>' +
+        '<tr><td>買掛金</td><td class="num">' + yen(liab.payable) + '</td></tr><tr><td>未払金 <a data-goto-ledger="liability:accrued" style="font-size:12px;margin-left:6px;">内訳を見る</a></td><td class="num">' + yen(liab.accrued) + '</td></tr><tr><td>借入金</td><td class="num">' + yen(liab.loan) + '</td></tr>' +
         '<tr><td><strong>負債合計</strong></td><td class="num"><strong>' + yen(liab.payable + liab.accrued + liab.loan) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="note">負債の発生・返済・支払いの記録は「入力」タブの区分から行います。</div>' +
@@ -1120,6 +1120,10 @@ function bindViewEvents() {
   const jy = document.getElementById('journal-year'); if (jy) jy.addEventListener('change', function () { window.__journalYear = Number(jy.value); renderView(); });
   const jm = document.getElementById('journal-month'); if (jm) jm.addEventListener('change', function () { window.__journalMonth = Number(jm.value); renderView(); });
   const ly = document.getElementById('ledger-year'); if (ly) ly.addEventListener('change', function () { window.__ledgerYear = Number(ly.value); renderView(); });
+  // 「内訳を見る」: 総勘定元帳のその科目(今年)を開く
+  document.querySelectorAll('[data-goto-ledger]').forEach(function (a) { a.style.cursor = 'pointer'; a.addEventListener('click', function () {
+    window.__ledgerNode = a.dataset.gotoLedger; window.__ledgerYear = new Date().getFullYear(); currentTab = 'ledger'; renderShell(); window.scrollTo(0, 0);
+  }); });
   const ln = document.getElementById('ledger-node'); if (ln) ln.addEventListener('change', function () { window.__ledgerNode = ln.value; renderView(); });
   const py = document.getElementById('pl-year'); if (py) py.addEventListener('change', function () { window.__plYear = Number(py.value); renderView(); });
   const pex = document.getElementById('pl-export'); if (pex) pex.addEventListener('click', exportPLCsv);
