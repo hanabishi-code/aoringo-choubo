@@ -140,11 +140,28 @@ function equityTotal(nodeKey, asOfDate) {
 }
 
 /* ============================== 固定資産・減価償却 ============================== */
+// 定額法の償却率(平成19年4月1日以後に取得した減価償却資産)。耐用年数 2〜50年
+// 出典: 減価償却資産の耐用年数等に関する省令 別表第八
+//       国税庁「減価償却資産の償却率表」 https://www.nta.go.jp/law/joho-zeikaishaku/shotoku/shinkoku/070412/pdf/3.pdf
+const STRAIGHT_LINE_RATES = {
+  2: 0.500, 3: 0.334, 4: 0.250, 5: 0.200, 6: 0.167, 7: 0.143, 8: 0.125, 9: 0.112, 10: 0.100,
+  11: 0.091, 12: 0.084, 13: 0.077, 14: 0.072, 15: 0.067, 16: 0.063, 17: 0.059, 18: 0.056, 19: 0.053, 20: 0.050,
+  21: 0.048, 22: 0.046, 23: 0.044, 24: 0.042, 25: 0.040, 26: 0.039, 27: 0.038, 28: 0.036, 29: 0.035, 30: 0.034,
+  31: 0.033, 32: 0.032, 33: 0.031, 34: 0.030, 35: 0.029, 36: 0.028, 37: 0.028, 38: 0.027, 39: 0.026, 40: 0.025,
+  41: 0.025, 42: 0.024, 43: 0.024, 44: 0.023, 45: 0.023, 46: 0.022, 47: 0.022, 48: 0.021, 49: 0.021, 50: 0.020
+};
+// 年間の償却費 = 取得価額 × 償却率。表にない耐用年数(1年・51年以上)は (取得価額 − 1) ÷ 耐用年数 で計算する
+function annualStraightLine(cost, life) {
+  const rate = STRAIGHT_LINE_RATES[life];
+  return rate ? cost * rate : Math.max(0, cost - 1) / life;
+}
+// 償却費の1円未満の端数処理(月数按分の結果にかける)。現在は四捨五入
+function roundDepreciation(x) { return Math.round(x); }
 function depreciationSchedule(asset) {
   const cost = Number(asset.cost) || 0;
   const life = Math.max(1, Number(asset.usefulLifeYears) || 1);
-  const base = Math.max(0, cost - 1);
-  const annualFull = base / life;
+  const base = Math.max(0, cost - 1); // 備忘価額として1円を残す
+  const annualFull = annualStraightLine(cost, life);
   const acqYear = Number(asset.acquisitionDate.slice(0, 4));
   const acqMonth = Number(asset.acquisitionDate.slice(5, 7));
   const disposalYear = asset.disposalDate ? Number(asset.disposalDate.slice(0, 4)) : null;
@@ -159,7 +176,7 @@ function depreciationSchedule(asset) {
     else if (y === acqYear) months = 12 - acqMonth + 1;
     else if (disposalYear && y === disposalYear) months = disposalMonth;
     months = Math.max(0, Math.min(12, months));
-    let amt = Math.round(annualFull * months / 12);
+    let amt = roundDepreciation(annualFull * months / 12);
     if (cum + amt > base) amt = base - cum;
     cum += amt;
     schedule[y] = { amount: amt, cumulative: cum, bookValue: cost - cum };
