@@ -6,7 +6,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION, syncPurchaseTransaction: syncPurchaseTransaction, assetsWithoutPayment: assetsWithoutPayment, assetPaymentNotice: assetPaymentNotice };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION, syncPurchaseTransaction: syncPurchaseTransaction, assetsWithoutPayment: assetsWithoutPayment, assetPaymentNotice: assetPaymentNotice, assetsWithInvalidLife: assetsWithInvalidLife, invalidLifeNotice: invalidLifeNotice };'))(document, window, localStorage);
 
 var results = [];
 function check(name, actual, expected, note) {
@@ -192,5 +192,17 @@ check('未設定の資産: 案内が出る/仕訳は自動で作らない', [app
 legacy.payFund = 'bank'; app.syncPurchaseTransaction(legacy); // 画面で支払い方法を設定して保存したとき
 var bsL = app.computeBS('2025-12-31');
 check('未設定の資産: 設定すると仕訳ができ、案内が消え、繰越利益 = 所得', [app.state.transactions.length, app.assetPaymentNotice(), bsL.retainedEarnings === app.computePL(2025).net], [1, '', true]);
+
+/* ---------- 9. 耐用年数が範囲外の既存データ・取り込み(消さずに計算を続け、警告する) ---------- */
+reset({ openingDate: '2025-01-01' });
+var odd = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 4, fixedAssets: [
+  { id: 'fa_1y', name: '1年', cost: 100001, usefulLifeYears: 1, acquisitionDate: '2025-01-01', disposalDate: '', payFund: 'bank' },
+  { id: 'fa_60', name: '60年', cost: 600001, usefulLifeYears: 60, acquisitionDate: '2025-01-01', disposalDate: '', payFund: 'bank' },
+  { id: 'fa_ok', name: '4年', cost: 240000, usefulLifeYears: 4, acquisitionDate: '2025-01-01', disposalDate: '', payFund: 'bank' }] });
+check('範囲外: 取り込みで消さない(3件とも残る・値もそのまま)', odd.fixedAssets.map(function (a) { return a.usefulLifeYears; }), [1, 60, 4]);
+app.state.fixedAssets = odd.fixedAssets;
+check('範囲外: 件数と警告', [app.assetsWithInvalidLife().length, app.invalidLifeNotice().indexOf('範囲外の固定資産が 2 件') >= 0], [2, true]);
+// 計算は続ける: 1年 → (100,001 − 1) ÷ 1 = 100,000、60年 → 600,000 ÷ 60 = 10,000、4年 → 60,000
+check('範囲外: 減価償却は (取得価額 − 1) ÷ 耐用年数 で続ける', [2025].map(function (y) { return app.computePL(y).expenseTotals.depreciation; }), [170000]);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';

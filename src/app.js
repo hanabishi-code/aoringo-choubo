@@ -584,6 +584,12 @@ function hankoSvg() {
 }
 function renderView() {
   const view = document.getElementById('view');
+  renderViewContent(view);
+  const notice = invalidLifeNotice(); // すべてのタブの上に表示
+  if (notice) view.insertAdjacentHTML('afterbegin', '<div style="margin-bottom:12px;">' + notice + '</div>');
+  bindViewEvents();
+}
+function renderViewContent(view) {
   if (currentTab === 'entry') view.innerHTML = viewEntry();
   else if (currentTab === 'journal') view.innerHTML = viewJournal();
   else if (currentTab === 'ledger') view.innerHTML = viewLedger();
@@ -593,7 +599,6 @@ function renderView() {
   else if (currentTab === 'invoice') view.innerHTML = viewInvoiceList();
   else if (currentTab === 'report') view.innerHTML = viewReport();
   else if (currentTab === 'settings') view.innerHTML = viewSettings();
-  bindViewEvents();
 }
 function storageFlag() {
   const ok = STORAGE_MODE === 'file';
@@ -607,6 +612,13 @@ function assetsWithoutPayment() { return (state.fixedAssets || []).filter(functi
 function assetPaymentNotice() {
   const n = assetsWithoutPayment().length; if (!n) return '';
   return '<div class="storage-flag"><span class="storage-dot warn"></span>支払い方法が未設定の固定資産が ' + n + ' 件あります。「資産・負債」タブの固定資産台帳で編集し、支払い方法を設定してください(設定すると支払いの仕訳を作ります)。未設定の間は、購入代金が現金・預金・未払金に反映されないため、貸借対照表の数字が実際と合いません。</div>';
+}
+// 耐用年数が償却率表の範囲外(2〜50年の整数でない)の固定資産。既存データや取り込みで入ってくることがある。
+// データは消さず、(取得価額 − 1) ÷ 耐用年数 で計算を続けたうえで、画面で修正を促す
+function assetsWithInvalidLife(list) { return (list || state.fixedAssets || []).filter(function (a) { return !isValidUsefulLife(Number(a.usefulLifeYears)); }); }
+function invalidLifeNotice() {
+  const n = assetsWithInvalidLife().length; if (!n) return '';
+  return '<div class="storage-flag"><span class="storage-dot warn"></span>耐用年数が 2〜50 年の範囲外の固定資産が ' + n + ' 件あります。「資産・負債」タブの固定資産台帳で修正してください。修正するまで、減価償却費は暫定値です。</div>';
 }
 function backupReminder() {
   if (!state.transactions.length && !state.invoices.length) return '';
@@ -851,7 +863,8 @@ function viewAssets() {
   const fa = state.fixedAssets || [];
   const rows = fa.map(function (a) {
     const dep = assetAnnualDepreciation(a, year); const bv = isDisposedBy(a, todayStr()) ? 0 : assetBookValueAsOf(a, todayStr());
-    const payTag = a.payFund ? '' : ' <span class="tag" style="color:var(--danger);border-color:var(--danger);">支払い方法を設定してください</span>';
+    const lifeTag = isValidUsefulLife(Number(a.usefulLifeYears)) ? '' : ' <span class="tag" style="color:var(--danger);border-color:var(--danger);">耐用年数を確認</span>';
+    const payTag = lifeTag + (a.payFund ? '' : ' <span class="tag" style="color:var(--danger);border-color:var(--danger);">支払い方法を設定してください</span>');
     const status = payTag + (a.disposalDate ? ' <span class="tag">' + (isSale(a) ? '売却' : '除却') + ' ' + esc(a.disposalDate) + '</span>' : '');
     return '<tr><td>' + esc(a.name) + status + '</td><td>' + esc(a.acquisitionDate) + '</td><td class="num">' + yen(a.cost) + '</td><td class="num">' + esc(a.usefulLifeYears) + '年</td><td class="num">' + yen(dep) + '</td><td class="num">' + yen(bv) + '</td><td><a data-edit-asset=\"' + esc(a.id) + '\">編集</a> <a data-del-asset=\"' + esc(a.id) + '\" style="color:var(--danger);">削除</a></td></tr>';
   }).join('');
@@ -888,7 +901,7 @@ function viewPL() {
   const pl = computePL(y);
   const yearOptions = years.map(function (yr) { return '<option value="' + yr + '" ' + (yr === y ? 'selected' : '') + '>' + yr + '年</option>'; }).join('');
   return (
-    '<section class="block"><h2>損益計算書</h2>' +
+    '<section class="block"><h2>損益計算書</h2>' + (assetsWithInvalidLife().length ? '<div class="note" style="color:var(--danger);">範囲外の耐用年数を含むため、減価償却費は暫定値です。</div>' : '') +
       '<div style="margin-bottom:14px;"><select class="year-select" id="pl-year">' + yearOptions + '</select></div>' +
       '<div class="kpi-row">' +
         '<div class="kpi"><div class="lbl">収入合計</div><div class="val num">' + yen(pl.incomeSum) + '</div></div>' +
@@ -922,7 +935,7 @@ function viewBS() {
   const asOf = window.__bsDate || todayStr();
   const bs = computeBS(asOf);
   return (
-    '<section class="block"><h2>貸借対照表(簡易)</h2>' + assetPaymentNotice() +
+    '<section class="block"><h2>貸借対照表(簡易)</h2>' + assetPaymentNotice() + (assetsWithInvalidLife().length ? '<div class="note" style="color:var(--danger);">範囲外の耐用年数を含むため、固定資産の帳簿価額は暫定値です。</div>' : '') +
       '<div class="field" style="max-width:220px;"><label>基準日</label><input type="date" id="bs-date" value="' + esc(asOf) + '"></div>' +
       '<div class="table-scroll"><table class="ledger"><tr><th>資産の部</th><th class="num">金額</th></tr>' +
         '<tr><td>現金</td><td class="num">' + yen(bs.cash) + '</td></tr>' +
@@ -1391,7 +1404,8 @@ function onImportBackup(e) {
       const dropped = (rawLen(raw.transactions) - len(data.transactions)) + (rawLen(raw.invoices) - len(data.invoices)) + (rawLen(raw.fixedAssets) - len(data.fixedAssets));
       const msg = 'ファイルの内容: 取引 ' + len(data.transactions) + ' 件(金額合計 ' + yen(sum(data.transactions)) + ')・請求書 ' + len(data.invoices) + ' 件・固定資産 ' + len(data.fixedAssets) + ' 件・レシート画像 ' + Object.keys(data.receipts).length + ' 枚' +
         (dropped > 0 ? '。形式が正しくない ' + dropped + ' 件は取り込みません' : '') +
-        (data.droppedReceipts > 0 ? '。不正な画像 ' + data.droppedReceipts + ' 枚は取り込みません' : '') + '。現在のデータと統合します(同じ ID のものは取り込みません)。現在のデータは取り込み前に退避されます。よろしいですか?';
+        (data.droppedReceipts > 0 ? '。不正な画像 ' + data.droppedReceipts + ' 枚は取り込みません' : '') +
+        (assetsWithInvalidLife(data.fixedAssets).length ? '。耐用年数が範囲外の固定資産 ' + assetsWithInvalidLife(data.fixedAssets).length + ' 件は、取り込み後に修正してください' : '') + '。現在のデータと統合します(同じ ID のものは取り込みません)。現在のデータは取り込み前に退避されます。よろしいですか?';
       if (!(await confirmDialog(msg, '取り込む'))) return;
       await saveChain; // 保存待ちの変更を書き終えてから退避する
       await invoke('backup_before_import');
@@ -1418,7 +1432,7 @@ function onImportBackup(e) {
       }, 'import');
       renderShell();
       const skipped = len(data.transactions) - added.transactions.length;
-      openModal('取り込み結果', '<p style="line-height:1.8;">取引 ' + added.transactions.length + ' 件(金額合計 ' + yen(sum(added.transactions)) + ')<br>請求書 ' + added.invoices.length + ' 件<br>固定資産 ' + added.fixedAssets.length + ' 件<br>レシート画像 ' + savedReceipts + ' 枚<br>を取り込みました。' +
+      openModal('取り込み結果', '<p style="line-height:1.8;">取引 ' + added.transactions.length + ' 件(金額合計 ' + yen(sum(added.transactions)) + ')<br>請求書 ' + added.invoices.length + ' 件<br>固定資産 ' + added.fixedAssets.length + ' 件' + (assetsWithInvalidLife(added.fixedAssets).length ? '(うち耐用年数が範囲外 ' + assetsWithInvalidLife(added.fixedAssets).length + ' 件。資産・負債タブで修正してください)' : '') + '<br>レシート画像 ' + savedReceipts + ' 枚<br>を取り込みました。' +
         (skipped > 0 ? '<br>取引 ' + skipped + ' 件はすでにあるため取り込んでいません。' : '') + '</p>' +
         '<p class="muted" style="margin-top:10px;">取り込み後の取引は合計 ' + state.transactions.length + ' 件(金額合計 ' + yen(sum(state.transactions)) + ')です。</p>');
     } catch (err) { toast(err && err.userMessage ? err.userMessage : '取り込みに失敗しました。ファイルを確認してください'); }
