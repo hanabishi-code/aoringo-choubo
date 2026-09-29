@@ -6,7 +6,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION };'))(document, window, localStorage);
 
 var results = [];
 function check(name, actual, expected, note) {
@@ -73,11 +73,48 @@ check('端数処理の初期値は切り捨て', app.defaultSettings().depreciat
 // 入力できる耐用年数は 2〜50 年の整数だけ
 check('耐用年数の入力チェック(1, 2, 50, 51, 2.5, NaN)', [1, 2, 50, 51, 2.5, NaN].map(app.isValidUsefulLife), [false, true, true, false, false, false]);
 
-/* ---------- 3. 除却した固定資産は、除却後の貸借対照表に残らない ---------- */
-reset({ openingDate: '2025-01-01' });
-app.state.fixedAssets.push({ id: 'fa_1', name: 'PC', cost: 240000, usefulLifeYears: 4, acquisitionDate: '2025-01-10', disposalDate: '2026-06-30' });
-check('除却後(2026-12-31)の固定資産の簿価 = 0', app.computeBS('2026-12-31').fixedAssetsVal, 0,
-  'アプリは除却した資産も簿価のまま貸借対照表に残し、除却損も計上しない');
+/* ---------- 3. 除却・売却(24万円・4年・2025年1月取得 → 2026年6月30日に処分) ---------- */
+// 償却: 2025年 60,000(12か月)、2026年 30,000(6月まで6か月)→ 処分時の帳簿価額 = 240,000 − 90,000 = 150,000
+function disposalCase(type) {
+  reset({ openingCash: 0, openingBank: 1000000, openingDate: '2025-01-01' });
+  var asset = { id: 'fa_1', name: 'PC', cost: 240000, usefulLifeYears: 4, acquisitionDate: '2025-01-10', disposalDate: '2026-06-30', disposalType: type };
+  if (type === 'sale') {
+    asset.saleAmount = 100000; asset.saleFund = 'bank';
+    tx('contribution', '2026-06-30', 100000, { fund: 'bank', linkedAssetId: 'fa_1' }); // 画面では売却を保存すると自動で作られる
+  }
+  app.state.fixedAssets.push(asset);
+}
+disposalCase('retire');
+var pl26 = app.computePL(2026), bs25 = app.computeBS('2025-12-31'), bs26 = app.computeBS('2026-12-31');
+check('除却: 2026年の償却費・固定資産除却損', [pl26.expenseTotals.depreciation, pl26.expenseTotals.retirement_loss], [30000, 150000]);
+check('除却: 2026年末の固定資産の簿価 = 0(帳簿から外れる)', bs26.fixedAssetsVal, 0);
+check('除却: 2025年末は簿価 180,000 のまま', bs25.fixedAssetsVal, 180000);
+check('除却: 事業主貸・事業主借は変わらない', [bs26.drawing, bs26.contribution], [0, 0]);
+check('除却: 資産合計 = 負債 + 純資産', bs26.assetsTotal, bs26.liabilitiesTotal + bs26.equityTotalVal);
+check('除却: 繰越利益の増減(2025末→2026末)= 2026年の所得(−180,000)', bs26.retainedEarnings - bs25.retainedEarnings, pl26.net);
+check('除却: 2026年の所得 = −(償却費 + 除却損)', pl26.net, -180000);
+
+disposalCase('sale');
+pl26 = app.computePL(2026); bs25 = app.computeBS('2025-12-31'); bs26 = app.computeBS('2026-12-31');
+check('売却: 2026年の償却費・固定資産除却損(除却損は出ない)', [pl26.expenseTotals.depreciation, pl26.expenseTotals.retirement_loss], [30000, 0]);
+check('売却: 2026年末の固定資産の簿価 = 0', bs26.fixedAssetsVal, 0);
+check('売却: 事業主貸 = 帳簿価額 150,000、事業主借 = 売却代金 100,000', [bs26.drawing, bs26.contribution], [150000, 100000]);
+check('売却: 預金 = 1,000,000 + 売却代金 100,000', bs26.bank, 1100000);
+check('売却: 資産合計 = 負債 + 純資産', bs26.assetsTotal, bs26.liabilitiesTotal + bs26.equityTotalVal);
+check('売却: 繰越利益の増減(2025末→2026末)= 2026年の所得(−30,000)', bs26.retainedEarnings - bs25.retainedEarnings, pl26.net);
+
+/* ---------- 3b. データ形式の移行(v2 → v3)と取り込みの検証 ---------- */
+var migrated = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 2, fixedAssets: [
+  { id: 'fa_a', name: 'A', cost: 1000, usefulLifeYears: 4, acquisitionDate: '2025-01-01', disposalDate: '2026-01-31' },
+  { id: 'fa_b', name: 'B', cost: 1000, usefulLifeYears: 4, acquisitionDate: '2025-01-01', disposalDate: '' }] });
+check('移行 v2→v3: 処分日のある資産は除却として扱う/処分日のない資産はそのまま', migrated.fixedAssets.map(function (a) { return a.disposalType || '-'; }), ['retire', '-']);
+var bad = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 3,
+  fixedAssets: [{ id: 'fa_c', name: 'C', cost: 1000, usefulLifeYears: 4, acquisitionDate: '2025-01-01', disposalDate: '2026-01-31', disposalType: 'hack', saleFund: 'wallet', saleAmount: 'abc' }],
+  transactions: [{ id: 'tx_x', kind: 'contribution', date: '2026-01-31', amount: 1, fund: 'bank', linkedAssetId: '../x' }] });
+var c = bad.fixedAssets[0];
+check('取り込み: 不正な処分の種類は除却に/不正な受け取り先は外す/売却代金は数値に', [c.disposalType, c.saleFund === undefined, c.saleAmount], ['retire', true, 0]);
+check('取り込み: 不正な linkedAssetId は外す', bad.transactions[0].linkedAssetId === undefined, true);
+check('SCHEMA_VERSION は 3', app.SCHEMA_VERSION, 3);
 
 /* ---------- 4. 損益計算書 ---------- */
 reset({ openingCash: 100000, openingBank: 500000, openingDate: '2025-01-01' });

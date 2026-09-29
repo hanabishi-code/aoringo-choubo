@@ -9,6 +9,7 @@ const KEEP_DAYS: i64 = 30;
 const PRE_RESTORE_SUFFIX: &str = "-pre-restore";
 const PRE_IMPORT_SUFFIX: &str = "-pre-import";
 const PRE_WIPE_SUFFIX: &str = "-pre-wipe";
+const PRE_MIGRATE_SUFFIX: &str = "-pre-migrate";
 /// 削除前の退避に変更履歴を同梱するときのキー(sanitizeBackup は未知のキーを無視する)
 const BUNDLED_HISTORY_KEY: &str = "_historyJsonl";
 const HISTORY_FILE: &str = "history.jsonl";
@@ -103,7 +104,7 @@ async fn export_file(app: tauri::AppHandle, filename: String, content: String) -
 
 /* ---------- 自動バックアップ ---------- */
 
-/// "data-YYYY-MM-DD_HHMMSS.json"(退避は "...HHMMSS-pre-restore.json" / "-pre-import.json" / "-pre-wipe.json")から日付を取り出す。
+/// "data-YYYY-MM-DD_HHMMSS.json"(退避は "...HHMMSS-pre-restore.json" / "-pre-import.json" / "-pre-wipe.json" / "-pre-migrate.json")から日付を取り出す。
 /// 形式が違うファイルは None(一覧にも出さず、削除対象にもしない)
 fn backup_date(name: &str) -> Option<chrono::NaiveDate> {
     let rest = name.strip_prefix("data-")?.strip_suffix(".json")?;
@@ -111,6 +112,7 @@ fn backup_date(name: &str) -> Option<chrono::NaiveDate> {
         .strip_suffix(PRE_RESTORE_SUFFIX)
         .or_else(|| rest.strip_suffix(PRE_IMPORT_SUFFIX))
         .or_else(|| rest.strip_suffix(PRE_WIPE_SUFFIX))
+        .or_else(|| rest.strip_suffix(PRE_MIGRATE_SUFFIX))
         .unwrap_or(rest);
     let (date, time) = rest.split_once('_')?;
     if time.len() != 6 || !time.chars().all(|c| c.is_ascii_digit()) {
@@ -280,6 +282,12 @@ fn wipe_in_dir(dir: &Path, now: chrono::NaiveDateTime) -> Result<(), String> {
         Err(e) => return Err(e.to_string()),
     }
     File::open(dir).and_then(|d| d.sync_all()).map_err(|e| e.to_string())
+}
+
+/// データ形式(schemaVersion)を新しくする前に、現在の data.json を「移行前」として必ず退避する
+#[tauri::command]
+fn backup_before_migration(app: tauri::AppHandle) -> Result<(), String> {
+    backup_with_suffix(&app, PRE_MIGRATE_SUFFIX)
 }
 
 /// JSON 取り込みの前に、現在のデータを「取り込み前」として退避する
@@ -459,6 +467,7 @@ pub fn run() {
             read_backup,
             restore_backup,
             backup_before_import,
+            backup_before_migration,
             append_history,
             wipe_all,
             save_receipt,
@@ -530,12 +539,14 @@ mod tests {
         backup_in_dir(&dir, "", t("2026-09-28 06:46:55")).unwrap();
         backup_in_dir(&dir, "", t("2026-09-28 07:00:00")).unwrap(); // 同じ内容 → 作らない
         backup_in_dir(&dir, PRE_RESTORE_SUFFIX, t("2026-09-28 07:20:00")).unwrap(); // 同じ内容でも作る
+        backup_in_dir(&dir, PRE_MIGRATE_SUFFIX, t("2026-09-28 07:30:00")).unwrap(); // 移行前も同じ内容でも作る
         let names = list_backup_names(&dir.join(BACKUP_DIR));
         assert_eq!(
             names,
             vec![
                 "data-2026-09-28_064655.json",
-                "data-2026-09-28_072000-pre-restore.json"
+                "data-2026-09-28_072000-pre-restore.json",
+                "data-2026-09-28_073000-pre-migrate.json"
             ]
         );
         fs::remove_dir_all(&dir).unwrap();

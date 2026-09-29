@@ -11,9 +11,10 @@ const ACCOUNTS = {
     { key: 'tax', label: '租税公課' }, { key: 'shipping', label: '荷造運賃' }, { key: 'utilities', label: '水道光熱費' },
     { key: 'travel', label: '旅費交通費' }, { key: 'communication', label: '通信費' }, { key: 'advertising', label: '広告宣伝費' },
     { key: 'entertainment', label: '接待交際費' }, { key: 'insurance', label: '損害保険料' }, { key: 'repair', label: '修繕費' },
-    { key: 'supplies', label: '消耗品費' }, { key: 'depreciation', label: '減価償却費' }, { key: 'welfare', label: '福利厚生費' },
+    { key: 'supplies', label: '消耗品費' }, { key: 'depreciation', label: '減価償却費', auto: true }, { key: 'welfare', label: '福利厚生費' },
     { key: 'wages', label: '給料賃金' }, { key: 'outsourcing', label: '外注工賃' }, { key: 'interest', label: '利子割引料' },
-    { key: 'rent', label: '地代家賃' }, { key: 'bad_debt', label: '貸倒金' }, { key: 'misc_expense', label: '雑費' }
+    { key: 'rent', label: '地代家賃' }, { key: 'bad_debt', label: '貸倒金' }, { key: 'misc_expense', label: '雑費' },
+    { key: 'retirement_loss', label: '固定資産除却損', auto: true }
   ],
   fund: [ { key: 'cash', label: '現金' }, { key: 'bank', label: '普通預金' } ],
   liability: [ { key: 'payable', label: '買掛金' }, { key: 'accrued', label: '未払金' }, { key: 'loan', label: '借入金' } ]
@@ -211,9 +212,28 @@ function assetBookValueAsOf(asset, dateStr) {
   cum = Math.min(cum, base);
   return cost - cum;
 }
+// 処分(除却・売却)した資産の、処分時点の帳簿価額 = 取得価額 − 処分した年までの償却費の累計
+// (処分した年は処分した月まで月割りで償却する)
+function assetDisposalBookValue(asset) {
+  if (!asset.disposalDate) return 0;
+  const s = depreciationSchedule(asset); const e = s[Number(asset.disposalDate.slice(0, 4))];
+  return e ? e.bookValue : (Number(asset.cost) || 0);
+}
+function isDisposedBy(asset, dateStr) { return !!asset.disposalDate && asset.disposalDate <= dateStr; }
+function isSale(asset) { return asset.disposalType === 'sale'; }
+// その年に除却(廃棄)した資産の帳簿価額の合計 = 固定資産除却損
+function totalRetirementLoss(year) {
+  return (state.fixedAssets || []).filter(function (a) { return a.disposalDate && !isSale(a) && a.disposalDate.slice(0, 4) === String(year); })
+    .reduce(function (s, a) { return s + assetDisposalBookValue(a); }, 0);
+}
+// 売却した資産の帳簿価額は経費にせず、事業主貸として帳簿から外す(譲渡所得の取得費の側に回るため)
+function soldAssetsDrawing(asOfDate) {
+  return (state.fixedAssets || []).filter(function (a) { return isSale(a) && isDisposedBy(a, asOfDate); })
+    .reduce(function (s, a) { return s + assetDisposalBookValue(a); }, 0);
+}
 function totalDepreciation(year) { return (state.fixedAssets || []).reduce(function (s, a) { return s + assetAnnualDepreciation(a, year); }, 0); }
 function totalFixedAssetsBookValue(asOfDate) {
-  return (state.fixedAssets || []).filter(function (a) { return a.acquisitionDate <= asOfDate; }).reduce(function (s, a) { return s + assetBookValueAsOf(a, asOfDate); }, 0);
+  return (state.fixedAssets || []).filter(function (a) { return a.acquisitionDate <= asOfDate && !isDisposedBy(a, asOfDate); }).reduce(function (s, a) { return s + assetBookValueAsOf(a, asOfDate); }, 0);
 }
 function latestInventoryClosing(year) {
   const inv = state.inventoryYearEnd || {};
@@ -239,6 +259,7 @@ function computePL(year) {
     }
   });
   expenseTotals.depreciation = totalDepreciation(year);
+  expenseTotals.retirement_loss = totalRetirementLoss(year);
   const inv = (state.inventoryYearEnd && state.inventoryYearEnd[year]) ? state.inventoryYearEnd[year] : { opening: 0, closing: 0 };
   const cogs = (Number(inv.opening) || 0) + purchases - (Number(inv.closing) || 0);
   const incomeSum = Object.values(incomeTotals).reduce(function (a, b) { return a + b; }, 0);
@@ -260,7 +281,7 @@ function computeBS(asOfDate) {
   const liabilitiesTotal = payable + accrued + loan;
   const openingCapital = Number(state.settings.openingCash || 0) + Number(state.settings.openingBank || 0);
   const contribution = equityTotal('contribution', asOfDate);
-  const drawing = equityTotal('drawing', asOfDate);
+  const drawing = equityTotal('drawing', asOfDate) + soldAssetsDrawing(asOfDate);
   const contributedCapital = openingCapital + contribution - drawing;
   const retainedEarnings = assetsTotal - liabilitiesTotal - contributedCapital;
   const equityTotalVal = contributedCapital + retainedEarnings;
@@ -346,7 +367,16 @@ const Store = {
     STORAGE_MODE = 'file';
     if (text == null) return;
     let data;
-    try { data = sanitizeBackup(JSON.parse(text)); }
+    try {
+      const raw = JSON.parse(text);
+      const ver = raw && typeof raw.schemaVersion === 'number' ? raw.schemaVersion : 1;
+      if (ver < SCHEMA_VERSION) {
+        // データ形式を新しくする前に、今の data.json を「移行前の退避」として必ず残す。失敗したら保存を止める
+        try { await invoke('backup_before_migration'); }
+        catch (e) { STORAGE_MODE = 'memory'; STORAGE_ERROR = '形式の移行前の退避に失敗したため、保存を止めています(データファイルは上書きしていません)'; return; }
+      }
+      data = sanitizeBackup(raw);
+    }
     catch (e) { STORAGE_MODE = 'memory'; STORAGE_ERROR = 'データファイルが壊れているため読み込めませんでした(ファイルは上書きしていません)'; return; }
     if (data.transactions) state.transactions = data.transactions;
     if (data.invoices) state.invoices = data.invoices;
@@ -395,14 +425,19 @@ const Store = {
   },
   async addFixedAsset(a) {
     const doc = Object.assign({}, a, { id: uid('fa') });
+    Object.keys(doc).forEach(function (k) { if (doc[k] === undefined) delete doc[k]; });
     state.fixedAssets.push(doc);
     await saveAndLog('add', 'fixedAsset', undefined, doc);
+    return doc;
   },
   async updateFixedAsset(id, patch) {
     const idx = state.fixedAssets.findIndex(function (a) { return a.id === id; }); if (idx < 0) return;
     const before = state.fixedAssets[idx];
-    state.fixedAssets[idx] = Object.assign({}, before, patch);
+    const next = Object.assign({}, before, patch);
+    Object.keys(next).forEach(function (k) { if (next[k] === undefined) delete next[k]; }); // 処分を取り消した項目は消す
+    state.fixedAssets[idx] = next;
     await saveAndLog('update', 'fixedAsset', before, state.fixedAssets[idx]);
+    return state.fixedAssets[idx];
   },
   async deleteFixedAsset(id) {
     const before = findById(state.fixedAssets, id);
@@ -581,12 +616,12 @@ function kindSelectHtml(current) {
   }).join('');
 }
 function accountSelectHtml(type, current, excludeDepreciation) {
-  let list = ACCOUNTS[type]; if (excludeDepreciation) list = list.filter(function (a) { return a.key !== 'depreciation'; });
+  let list = ACCOUNTS[type]; if (excludeDepreciation) list = list.filter(function (a) { return !a.auto; });
   return '<label>勘定科目</label><select id="f-account">' + list.map(function (a) { return '<option value="' + a.key + '" ' + (a.key === current ? 'selected' : '') + '>' + a.label + '</option>'; }).join('') + '</select>';
 }
 function accrualOptionsHtml(current) {
   let html = '<optgroup label="経費">';
-  ACCOUNTS.expense.filter(function (a) { return a.key !== 'depreciation'; }).forEach(function (a) { const v = 'expense:' + a.key; html += '<option value="' + v + '" ' + (v === current ? 'selected' : '') + '>' + a.label + '</option>'; });
+  ACCOUNTS.expense.filter(function (a) { return !a.auto; }).forEach(function (a) { const v = 'expense:' + a.key; html += '<option value="' + v + '" ' + (v === current ? 'selected' : '') + '>' + a.label + '</option>'; });
   html += '</optgroup><optgroup label="仕入">';
   ACCOUNTS.cogs.forEach(function (a) { const v = 'cogs:' + a.key; html += '<option value="' + v + '" ' + (v === current ? 'selected' : '') + '>' + a.label + '</option>'; });
   html += '</optgroup>';
@@ -646,7 +681,7 @@ function txRowHtml(t) {
   return (
     '<div class="tx-row">' + (t.receiptAssetId ? '<div class="tx-thumb" data-receipt-open="' + esc(t.receiptAssetId) + '"><img data-receipt="' + esc(t.receiptAssetId) + '" alt=""></div>' : '<div class="tx-thumb"></div>') +
       '<div class="tx-main"><div class="tx-top"><span class="tx-cat">' + esc(label) + '</span><span class="tx-amt num ' + cls + '">' + sign + yen(t.amount) + '</span></div>' +
-      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
+      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + (t.linkedAssetId ? '<span class="tag">固定資産の売却</span> ' : '') + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
       '<div class="tx-actions"><a data-edit-tx=\"' + esc(t.id) + '\">編集</a><a data-del-tx=\"' + esc(t.id) + '\" style="color:var(--danger);">削除</a></div></div></div>'
   );
 }
@@ -708,12 +743,22 @@ function viewLedger() {
 /* ============================== 資産・負債タブ ============================== */
 function assetFormHtml(a) {
   a = a || { name: '', acquisitionDate: todayStr(), cost: '', usefulLifeYears: '', disposalDate: '' };
+  const sale = isSale(a);
   return (
     '<div class="field"><label>資産名</label><input type="text" id="af-name" value="' + esc(a.name) + '" placeholder="例:ノートパソコン"></div>' +
     '<div class="field-row"><div class="field"><label>取得日</label><input type="date" id="af-date" value="' + esc(a.acquisitionDate) + '"></div>' +
     '<div class="field"><label>取得価額(円)</label><input type="number" id="af-cost" value="' + esc(a.cost) + '"></div></div>' +
     '<div class="field-row"><div class="field"><label>耐用年数(年・2〜50)</label><input type="number" id="af-life" min="2" max="50" step="1" value="' + esc(a.usefulLifeYears) + '"></div>' +
     '<div class="field"><label>除却・売却日(任意)</label><input type="date" id="af-disposal" value="' + esc(a.disposalDate || '') + '"></div></div>' +
+    '<div class="field"><label>処分の種類</label><div class="radio-group">' +
+      '<label><input type="radio" name="af-dtype" value="retire"' + (sale ? '' : ' checked') + '> 除却(廃棄)</label>' +
+      '<label><input type="radio" name="af-dtype" value="sale"' + (sale ? ' checked' : '') + '> 売却</label></div></div>' +
+    '<div id="af-sale-fields"' + (sale ? '' : ' hidden') + '>' +
+      '<div class="field-row"><div class="field"><label>売却代金(円)</label><input type="number" id="af-sale-amount" min="0" step="1" value="' + esc(a.saleAmount || '') + '"></div>' +
+      '<div class="field"><label>受け取り先</label><select id="af-sale-fund"><option value="cash"' + (a.saleFund === 'cash' ? ' selected' : '') + '>現金</option><option value="bank"' + (a.saleFund === 'cash' ? '' : ' selected') + '>普通預金</option></select></div></div>' +
+      '<div class="note"><strong>事業用資産の売却益は、原則として譲渡所得となり、本アプリでは計算しません。税理士・税務署に確認してください。</strong><br>売却した年は売却した月まで償却し、残りの帳簿価額は「事業主貸」、売却代金は「事業主借」として記録します。</div>' +
+    '</div>' +
+    '<div class="note" id="af-retire-note"' + (sale ? ' hidden' : '') + '>除却した年は除却した月まで償却し、残りの帳簿価額を「固定資産除却損」(経費)にします。</div>' +
     '<div class="note">定額法(残存価額1円・月割償却)で自動計算します。耐用年数は国税庁の「耐用年数表」でご確認ください。</div>' +
     '<button type="button" class="btn block" id="af-save">保存する</button>'
   );
@@ -721,13 +766,33 @@ function assetFormHtml(a) {
 function openAssetModal(asset) {
   editingAssetId = asset ? asset.id : null;
   openModal(asset ? '固定資産を編集' : '固定資産を登録', assetFormHtml(asset));
+  const dtype = function () { const el = document.querySelector('input[name="af-dtype"]:checked'); return el ? el.value : 'retire'; };
+  document.querySelectorAll('input[name="af-dtype"]').forEach(function (r) { r.addEventListener('change', function () {
+    document.getElementById('af-sale-fields').hidden = dtype() !== 'sale'; document.getElementById('af-retire-note').hidden = dtype() === 'sale';
+  }); });
   document.getElementById('af-save').addEventListener('click', async function () {
     const doc = { name: val('af-name'), acquisitionDate: val('af-date'), cost: Number(val('af-cost')) || 0, usefulLifeYears: Number(val('af-life')), disposalDate: val('af-disposal') || null };
+    if (doc.disposalDate) {
+      doc.disposalType = dtype();
+      if (doc.disposalType === 'sale') { doc.saleAmount = Number(val('af-sale-amount')) || 0; doc.saleFund = val('af-sale-fund') === 'cash' ? 'cash' : 'bank'; }
+      else { doc.saleAmount = undefined; doc.saleFund = undefined; }
+    } else { doc.disposalType = undefined; doc.saleAmount = undefined; doc.saleFund = undefined; }
     if (!doc.name || !doc.acquisitionDate || doc.cost <= 0) { toast('必須項目を入力してください'); return; }
+    if (doc.disposalDate && doc.disposalDate < doc.acquisitionDate) { toast('除却・売却日は取得日より後にしてください', 6000); return; }
+    if (doc.disposalType === 'sale' && doc.saleAmount < 0) { toast('売却代金を確認してください'); return; }
     if (!isValidUsefulLife(doc.usefulLifeYears)) { toast('耐用年数は 2〜50 年の整数で入力してください(償却率表にある範囲です)', 6000); document.getElementById('af-life').focus(); return; }
-    if (editingAssetId) await Store.updateFixedAsset(editingAssetId, doc); else await Store.addFixedAsset(doc);
+    const saved = editingAssetId ? await Store.updateFixedAsset(editingAssetId, doc) : await Store.addFixedAsset(doc);
+    if (saved) await syncSaleTransaction(saved);
     closeModal(); renderShell();
   });
+}
+// 売却代金は「事業主借(入金)」の取引として自動で作り、固定資産と連動させる(linkedAssetId)
+function linkedSaleTx(assetId) { return state.transactions.find(function (t) { return t.linkedAssetId === assetId; }); }
+async function syncSaleTransaction(asset) {
+  const linked = linkedSaleTx(asset.id);
+  if (!(asset.disposalDate && isSale(asset) && asset.saleAmount > 0)) { if (linked) await Store.deleteTransaction(linked.id); return; }
+  const payload = { kind: 'contribution', date: asset.disposalDate, amount: asset.saleAmount, fund: asset.saleFund || 'bank', memo: '固定資産の売却代金(' + asset.name + ')', linkedAssetId: asset.id };
+  if (linked) await Store.updateTransaction(linked.id, payload); else await Store.addTransaction(payload);
 }
 function invYearFormHtml(y, data) {
   data = data || { opening: 0, closing: 0 };
@@ -753,8 +818,9 @@ function viewAssets() {
   const yearOptions = years.map(function (yr) { return '<option value="' + yr + '" ' + (yr === year ? 'selected' : '') + '>' + yr + '年</option>'; }).join('');
   const fa = state.fixedAssets || [];
   const rows = fa.map(function (a) {
-    const dep = assetAnnualDepreciation(a, year); const bv = assetBookValueAsOf(a, todayStr());
-    return '<tr><td>' + esc(a.name) + '</td><td>' + esc(a.acquisitionDate) + '</td><td class="num">' + yen(a.cost) + '</td><td class="num">' + esc(a.usefulLifeYears) + '年</td><td class="num">' + yen(dep) + '</td><td class="num">' + yen(bv) + '</td><td><a data-edit-asset=\"' + esc(a.id) + '\">編集</a> <a data-del-asset=\"' + esc(a.id) + '\" style="color:var(--danger);">削除</a></td></tr>';
+    const dep = assetAnnualDepreciation(a, year); const bv = isDisposedBy(a, todayStr()) ? 0 : assetBookValueAsOf(a, todayStr());
+    const status = a.disposalDate ? ' <span class="tag">' + (isSale(a) ? '売却' : '除却') + ' ' + esc(a.disposalDate) + '</span>' : '';
+    return '<tr><td>' + esc(a.name) + status + '</td><td>' + esc(a.acquisitionDate) + '</td><td class="num">' + yen(a.cost) + '</td><td class="num">' + esc(a.usefulLifeYears) + '年</td><td class="num">' + yen(dep) + '</td><td class="num">' + yen(bv) + '</td><td><a data-edit-asset=\"' + esc(a.id) + '\">編集</a> <a data-del-asset=\"' + esc(a.id) + '\" style="color:var(--danger);">削除</a></td></tr>';
   }).join('');
   const inv = state.inventoryYearEnd || {}; const invYears = Object.keys(inv).map(Number).sort(function (a, b) { return b - a; });
   const invRows = invYears.map(function (y) { return '<tr><td>' + y + '年</td><td class="num">' + yen(inv[y].opening) + '</td><td class="num">' + yen(inv[y].closing) + '</td><td><a data-edit-inv-year="' + y + '">編集</a></td></tr>'; }).join('');
@@ -808,7 +874,7 @@ function viewPL() {
         '<tr><td><strong>差引金額(売上総利益)</strong></td><td class="num"><strong>' + yen(pl.grossProfit) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="table-scroll" style="margin-top:16px;"><table class="ledger"><tr><th>経費の部</th><th class="num">金額</th></tr>' +
-        ACCOUNTS.expense.map(function (a) { return '<tr><td>' + a.label + (a.key === 'depreciation' ? ' <span class="tag">自動計算</span>' : '') + '</td><td class="num">' + yen(pl.expenseTotals[a.key]) + '</td></tr>'; }).join('') +
+        ACCOUNTS.expense.map(function (a) { return '<tr><td>' + a.label + (a.auto ? ' <span class="tag">自動計算</span>' : '') + '</td><td class="num">' + yen(pl.expenseTotals[a.key]) + '</td></tr>'; }).join('') +
         '<tr><td><strong>経費合計</strong></td><td class="num"><strong>' + yen(pl.expenseSum) + '</strong></td></tr>' +
         '<tr><td class="accent"><strong>差引金額(所得金額)</strong></td><td class="num accent"><strong>' + yen(pl.net) + '</strong></td></tr>' +
       '</table></div>' +
@@ -1014,8 +1080,9 @@ function bindViewEvents() {
     const cancelBtn = document.getElementById('cancel-edit');
     if (cancelBtn) cancelBtn.addEventListener('click', function () { editingTxId = null; renderView(); });
   }
-  document.querySelectorAll('[data-edit-tx]').forEach(function (a) { a.addEventListener('click', function () { editingTxId = a.dataset.editTx; renderView(); window.scrollTo(0, 0); }); });
-  document.querySelectorAll('[data-del-tx]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この取引を削除しますか?', '削除する'))) return; await Store.deleteTransaction(a.dataset.delTx); renderShell(); }); });
+  const linkedNotice = function (id) { const t = findById(state.transactions, id); if (t && t.linkedAssetId) { toast('この取引は固定資産の売却から自動で作られています。固定資産台帳(資産・負債タブ)で変更してください', 6000); return true; } return false; };
+  document.querySelectorAll('[data-edit-tx]').forEach(function (a) { a.addEventListener('click', function () { if (linkedNotice(a.dataset.editTx)) return; editingTxId = a.dataset.editTx; renderView(); window.scrollTo(0, 0); }); });
+  document.querySelectorAll('[data-del-tx]').forEach(function (a) { a.addEventListener('click', async function () { if (linkedNotice(a.dataset.delTx)) return; if (!(await confirmDialog('この取引を削除しますか?', '削除する'))) return; await Store.deleteTransaction(a.dataset.delTx); renderShell(); }); });
 
   const jy = document.getElementById('journal-year'); if (jy) jy.addEventListener('change', function () { window.__journalYear = Number(jy.value); renderView(); });
   const jm = document.getElementById('journal-month'); if (jm) jm.addEventListener('change', function () { window.__journalMonth = Number(jm.value); renderView(); });
@@ -1029,7 +1096,7 @@ function bindViewEvents() {
   const assetsYearSel = document.getElementById('assets-year'); if (assetsYearSel) assetsYearSel.addEventListener('change', function () { window.__assetsYear = Number(assetsYearSel.value); renderView(); });
   const newAsset = document.getElementById('new-asset'); if (newAsset) newAsset.addEventListener('click', function () { openAssetModal(null); });
   document.querySelectorAll('[data-edit-asset]').forEach(function (a) { a.addEventListener('click', function () { openAssetModal(state.fixedAssets.find(function (x) { return x.id === a.dataset.editAsset; })); }); });
-  document.querySelectorAll('[data-del-asset]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この固定資産を削除しますか?', '削除する'))) return; await Store.deleteFixedAsset(a.dataset.delAsset); renderView(); }); });
+  document.querySelectorAll('[data-del-asset]').forEach(function (a) { a.addEventListener('click', async function () { if (!(await confirmDialog('この固定資産を削除しますか?' + (linkedSaleTx(a.dataset.delAsset) ? '(自動で作った売却代金の取引も削除します)' : ''), '削除する'))) return; const lt = linkedSaleTx(a.dataset.delAsset); if (lt) await Store.deleteTransaction(lt.id); await Store.deleteFixedAsset(a.dataset.delAsset); renderShell(); }); });
   const newInvYear = document.getElementById('new-inv-year'); if (newInvYear) newInvYear.addEventListener('click', function () { openInvYearModal(null); });
   document.querySelectorAll('[data-edit-inv-year]').forEach(function (a) { a.addEventListener('click', function () { openInvYearModal(Number(a.dataset.editInvYear)); }); });
 
@@ -1171,7 +1238,7 @@ async function exportBackup() {
   if (ok && missing) toast('見つからない画像が ' + missing + ' 枚ありました(それ以外は書き出しました)');
 }
 /* ============================== バックアップの検証 ============================== */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+\/]*={0,2}$/;
 // 旧版のデータを現在の形式に移行する。版ごとに1段ずつ上げる
@@ -1182,6 +1249,15 @@ function migrateBackup(raw) {
     // v1 → v2: バックアップにレシート画像(receipts: { 画像ID: base64 })を同梱できるようになった。v1 には無い
     out.receipts = {};
     v = 2;
+  }
+  if (v < 3) {
+    // v2 → v3: 固定資産に処分の種類(disposalType: retire=除却 / sale=売却)・売却代金・受け取り先を追加。
+    // それまでの「除却・売却日」は区別がなかったため、除却として扱う(画面で売却に直せる)
+    if (Array.isArray(out.fixedAssets)) out.fixedAssets = out.fixedAssets.map(function (a) {
+      if (a && typeof a === 'object' && a.disposalDate && a.disposalType === undefined) return Object.assign({}, a, { disposalType: 'retire' });
+      return a;
+    });
+    v = 3;
   }
   out.schemaVersion = v;
   return out;
@@ -1200,7 +1276,7 @@ function cleanReceipts(obj) {
   return { receipts: out, dropped: dropped };
 }
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const NUM_FIELDS = ['amount', 'cost', 'usefulLifeYears', 'qty', 'unitPrice', 'taxRate', 'openingCash', 'openingBank', 'opening', 'closing', 'invoiceSeq'];
+const NUM_FIELDS = ['amount', 'cost', 'saleAmount', 'usefulLifeYears', 'qty', 'unitPrice', 'taxRate', 'openingCash', 'openingBank', 'opening', 'closing', 'invoiceSeq'];
 const BAD_KEYS = ['__proto__', 'constructor', 'prototype'];
 function importError(msg) { const e = new Error(msg); e.userMessage = msg; return e; }
 function cleanValue(v, depth, key) {
@@ -1230,11 +1306,17 @@ function sanitizeBackup(raw) {
   const out = {};
   out.transactions = cleanRecords(raw.transactions, function (t) { return Object.prototype.hasOwnProperty.call(KIND_LABELS, t.kind); });
   // 画像 ID の形式が不正なら、取引は残して画像の参照だけ外す
+  if (out.transactions) out.transactions.forEach(function (t) { if (t.linkedAssetId !== undefined && !(typeof t.linkedAssetId === 'string' && ID_RE.test(t.linkedAssetId))) delete t.linkedAssetId; });
   if (out.transactions) out.transactions.forEach(function (t) { if (t.receiptAssetId !== undefined && !(typeof t.receiptAssetId === 'string' && (t.receiptAssetId === '' || ID_RE.test(t.receiptAssetId)))) delete t.receiptAssetId; });
   const rc = cleanReceipts(raw.receipts);
   out.receipts = rc.receipts; out.droppedReceipts = rc.dropped;
   out.invoices = cleanRecords(raw.invoices);
   out.fixedAssets = cleanRecords(raw.fixedAssets);
+  if (out.fixedAssets) out.fixedAssets.forEach(function (a) {
+    if (a.disposalType !== undefined && a.disposalType !== 'retire' && a.disposalType !== 'sale') delete a.disposalType;
+    if (a.disposalDate && !a.disposalType) a.disposalType = 'retire';
+    if (a.saleFund !== undefined && a.saleFund !== 'cash' && a.saleFund !== 'bank') delete a.saleFund;
+  });
   if (raw.inventoryYearEnd && typeof raw.inventoryYearEnd === 'object') {
     out.inventoryYearEnd = {};
     Object.keys(raw.inventoryYearEnd).forEach(function (y) { if (/^\d{4}$/.test(y)) { const v = raw.inventoryYearEnd[y]; if (v && typeof v === 'object') out.inventoryYearEnd[y] = { opening: Number(v.opening) || 0, closing: Number(v.closing) || 0 }; } });
@@ -1306,7 +1388,7 @@ const HISTORY_TARGETS = { transaction: '取引', invoice: '請求書', fixedAsse
 const HISTORY_FIELD_LABELS = { kind: '種類', date: '日付', amount: '金額', memo: 'メモ', fund: '入出金', account: '勘定科目', liability: '負債科目', accountType: '科目区分',
   number: '請求書番号', issueDate: '発行日', dueDate: '支払期限', clientName: '取引先', clientAddress: '取引先住所', items: '明細', taxRate: '税率', notes: '備考', status: '状態',
   name: '名称', acquisitionDate: '取得日', cost: '取得価額', usefulLifeYears: '耐用年数', disposalDate: '除却日', opening: '期首棚卸高', closing: '期末棚卸高',
-  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', receiptAssetId: 'レシート画像' };
+  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', receiptAssetId: 'レシート画像' };
 function historySummary(e) {
   const d = e.after || e.before || {};
   if (e.target === 'transaction') return (d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.memo ? ' ' + d.memo : '');
@@ -1355,9 +1437,9 @@ async function openHistoryModal() {
 
 /* ============================== 自動バックアップからの復元 ============================== */
 function backupLabel(name) {
-  const m = /^data-(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(-pre-restore|-pre-import|-pre-wipe)?\.json$/.exec(name);
+  const m = /^data-(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})(-pre-restore|-pre-import|-pre-wipe|-pre-migrate)?\.json$/.exec(name);
   if (!m) return name;
-  const tag = m[7] === '-pre-restore' ? '(復元前の退避)' : m[7] === '-pre-import' ? '(取り込み前の退避)' : m[7] === '-pre-wipe' ? '(削除前の退避)' : '';
+  const tag = m[7] === '-pre-restore' ? '(復元前の退避)' : m[7] === '-pre-import' ? '(取り込み前の退避)' : m[7] === '-pre-wipe' ? '(削除前の退避)' : m[7] === '-pre-migrate' ? '(形式の移行前の退避)' : '';
   return m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日 ' + m[4] + ':' + m[5] + ':' + m[6] + tag;
 }
 async function openRestoreModal() {
