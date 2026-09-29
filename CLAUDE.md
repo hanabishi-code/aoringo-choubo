@@ -20,15 +20,20 @@
 - 依存: chrono(日付)、tauri-plugin-dialog(保存ダイアログ)。いずれもユーザー承認済み・通信なし
 - 開発ビルドの起動: `src-tauri/target/debug/keiri-note`(`cargo build` 後)。
   自己テスト: `KEIRI_SELFTEST=1`(画像保存)/ `KEIRI_SELFTEST=stress`(強制終了テスト用)+ `KEIRI_DATA_DIR=<一時フォルダ>`。開発ビルドのみ有効
-- テスト: `cargo test`(src-tauri)、`osascript -l JavaScript tests/check_import.js`、`tests/check_receipt_ipc.js`
+- テスト: `cargo test`(src-tauri)、`osascript -l JavaScript tests/check_calc.js`・`check_import.js`・`check_history.js`・`check_receipt_ipc.js`
 
-## データモデル(schemaVersion 2)
-- `transactions[]`: id, kind(KIND_LABELS のキー), date, amount, memo, fund, 勘定科目関連, receiptAssetId?
+## データモデル(schemaVersion 4)
+- `transactions[]`: id, kind(KIND_LABELS のキー), date, amount, memo, fund, 勘定科目関連, receiptAssetId?, linkedAssetId?
+  - kind `asset_purchase`(固定資産の購入): 固定資産台帳から自動で作る。借方 固定資産 / 貸方 fund(cash/bank)または liability(accrued=未払金)
+  - `linkedAssetId` のある取引は台帳と連動(購入 = asset_purchase、売却代金 = contribution)。取引一覧から直接は編集・削除しない
 - `invoices[]`: id, number, issueDate, dueDate, clientName, clientAddress, items[{name, qty, unitPrice}], taxRate, notes, status
-- `fixedAssets[]`: id, name, acquisitionDate, cost, usefulLifeYears, disposalDate
+- `fixedAssets[]`: id, name, acquisitionDate, cost, usefulLifeYears(2〜50), disposalDate,
+  payFund?(cash / bank / accrued。未設定は支払い未記録の既存資産), disposalType?(retire=除却 / sale=売却), saleAmount?, saleFund?(cash / bank)
 - `inventoryYearEnd{ "YYYY": {opening, closing} }`
-- `settings`: `defaultSettings()` のキーのみ
-- バックアップ JSON のみ: `receipts{ 画像ID: base64 }`(v2 で追加。v1 からは `migrateBackup()` で移行)
+- `settings`: `defaultSettings()` のキーのみ(depreciationRounding: floor / round / ceil、初期値 floor を含む)
+- バックアップ JSON のみ: `receipts{ 画像ID: base64 }`
+- 版ごとの変更と移行(`migrateBackup()`): v2 で receipts、v3 で固定資産の処分の種類・売却代金(処分日のある既存資産は除却)、
+  v4 で asset_purchase と payFund(既存資産は未設定のまま)。移行の前に data.json を `*-pre-migrate.json` として必ず退避する
 データ形式を変える場合は schemaVersion を上げ、旧版からの移行関数を必ず書くこと。
 
 ## 第2段階: Mac アプリ化(完了条件つき)
