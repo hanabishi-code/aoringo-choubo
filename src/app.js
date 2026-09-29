@@ -599,7 +599,14 @@ function storageFlag() {
   const ok = STORAGE_MODE === 'file';
   const label = ok ? '保存先: この Mac 内のファイル(アプリのデータフォルダ。Time Machine の対象です)'
     : '保存できません: ' + (STORAGE_ERROR || '保存先を利用できません') + '。この画面での変更は保存されません';
-  return '<div class="storage-flag"><span class="storage-dot ' + (ok ? 'ok' : 'warn') + '"></span>' + label + '</div>' + backupReminder();
+  return '<div class="storage-flag"><span class="storage-dot ' + (ok ? 'ok' : 'warn') + '"></span>' + label + '</div>' + backupReminder() + assetPaymentNotice();
+}
+// 支払いが記録されていない固定資産(この仕組みより前に登録したもの)の案内。
+// 未設定の間は購入代金が資金・未払金から引かれないため、貸借対照表の繰越利益が所得と一致しない
+function assetsWithoutPayment() { return (state.fixedAssets || []).filter(function (a) { return !a.payFund; }); }
+function assetPaymentNotice() {
+  const n = assetsWithoutPayment().length; if (!n) return '';
+  return '<div class="storage-flag"><span class="storage-dot warn"></span>支払い方法が未設定の固定資産が ' + n + ' 件あります。「資産・負債」タブの固定資産台帳で編集し、支払い方法を設定してください(設定すると支払いの仕訳を作ります)。未設定の間は、購入代金が現金・預金・未払金に反映されないため、貸借対照表の数字が実際と合いません。</div>';
 }
 function backupReminder() {
   if (!state.transactions.length && !state.invoices.length) return '';
@@ -756,7 +763,7 @@ function assetFormHtml(a) {
     '<div class="field-row"><div class="field"><label>取得日</label><input type="date" id="af-date" value="' + esc(a.acquisitionDate) + '"></div>' +
     '<div class="field"><label>取得価額(円)</label><input type="number" id="af-cost" value="' + esc(a.cost) + '"></div></div>' +
     '<div class="field"><label>支払い方法</label><select id="af-pay">' +
-      (a.id && !a.payFund ? '<option value="" selected>記録しない(登録済みの資産)</option>' : '') +
+      (a.id && !a.payFund ? '<option value="" selected>未設定(支払いの仕訳を作らない)</option>' : '') +
       '<option value="cash"' + (a.payFund === 'cash' ? ' selected' : '') + '>現金</option>' +
       '<option value="bank"' + (a.payFund === 'bank' || (!a.id && !a.payFund) ? ' selected' : '') + '>普通預金</option>' +
       '<option value="accrued"' + (a.payFund === 'accrued' ? ' selected' : '') + '>未払金(あとで払う・分割・カード払い)</option></select>' +
@@ -844,14 +851,15 @@ function viewAssets() {
   const fa = state.fixedAssets || [];
   const rows = fa.map(function (a) {
     const dep = assetAnnualDepreciation(a, year); const bv = isDisposedBy(a, todayStr()) ? 0 : assetBookValueAsOf(a, todayStr());
-    const status = a.disposalDate ? ' <span class="tag">' + (isSale(a) ? '売却' : '除却') + ' ' + esc(a.disposalDate) + '</span>' : '';
+    const payTag = a.payFund ? '' : ' <span class="tag" style="color:var(--danger);border-color:var(--danger);">支払い方法を設定してください</span>';
+    const status = payTag + (a.disposalDate ? ' <span class="tag">' + (isSale(a) ? '売却' : '除却') + ' ' + esc(a.disposalDate) + '</span>' : '');
     return '<tr><td>' + esc(a.name) + status + '</td><td>' + esc(a.acquisitionDate) + '</td><td class="num">' + yen(a.cost) + '</td><td class="num">' + esc(a.usefulLifeYears) + '年</td><td class="num">' + yen(dep) + '</td><td class="num">' + yen(bv) + '</td><td><a data-edit-asset=\"' + esc(a.id) + '\">編集</a> <a data-del-asset=\"' + esc(a.id) + '\" style="color:var(--danger);">削除</a></td></tr>';
   }).join('');
   const inv = state.inventoryYearEnd || {}; const invYears = Object.keys(inv).map(Number).sort(function (a, b) { return b - a; });
   const invRows = invYears.map(function (y) { return '<tr><td>' + y + '年</td><td class="num">' + yen(inv[y].opening) + '</td><td class="num">' + yen(inv[y].closing) + '</td><td><a data-edit-inv-year="' + y + '">編集</a></td></tr>'; }).join('');
   const liab = { payable: liabilityBalance('payable', todayStr()), accrued: liabilityBalance('accrued', todayStr()), loan: liabilityBalance('loan', todayStr()) };
   return (
-    '<section class="block"><h2>固定資産台帳</h2>' +
+    '<section class="block"><h2>固定資産台帳</h2>' + assetPaymentNotice() +
       '<div style="margin-bottom:10px;"><select class="year-select" id="assets-year">' + yearOptions + '</select><span class="muted" style="margin-left:8px;font-size:12px;">の減価償却費を表示</span></div>' +
       '<div class="table-scroll"><table class="ledger compact"><tr><th>資産名</th><th>取得日</th><th class="num">取得価額</th><th class="num">耐用年数</th><th class="num">' + year + '年償却費</th><th class="num">現在の帳簿価額</th><th></th></tr>' +
         (rows || '<tr><td colspan="7" class="muted" style="padding:16px 6px;">まだ登録されていません</td></tr>') +
@@ -914,7 +922,7 @@ function viewBS() {
   const asOf = window.__bsDate || todayStr();
   const bs = computeBS(asOf);
   return (
-    '<section class="block"><h2>貸借対照表(簡易)</h2>' +
+    '<section class="block"><h2>貸借対照表(簡易)</h2>' + assetPaymentNotice() +
       '<div class="field" style="max-width:220px;"><label>基準日</label><input type="date" id="bs-date" value="' + esc(asOf) + '"></div>' +
       '<div class="table-scroll"><table class="ledger"><tr><th>資産の部</th><th class="num">金額</th></tr>' +
         '<tr><td>現金</td><td class="num">' + yen(bs.cash) + '</td></tr>' +

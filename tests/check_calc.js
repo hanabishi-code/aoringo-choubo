@@ -6,7 +6,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION, syncPurchaseTransaction: syncPurchaseTransaction };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, movementsOf: movementsOf, depreciationSchedule: depreciationSchedule, computePL: computePL, computeBS: computeBS, KIND_LABELS: KIND_LABELS, isValidUsefulLife: isValidUsefulLife, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION, syncPurchaseTransaction: syncPurchaseTransaction, assetsWithoutPayment: assetsWithoutPayment, assetPaymentNotice: assetPaymentNotice };'))(document, window, localStorage);
 
 var results = [];
 function check(name, actual, expected, note) {
@@ -183,5 +183,14 @@ check('未払金で購入: 繰越利益の増減(2025末→2026末)= 2026年の�
 card.payFund = 'bank'; app.syncPurchaseTransaction(card);
 ctx = app.state.transactions.filter(function (t) { return t.linkedAssetId === 'fa_3'; })[0];
 check('支払い方法を未払金 → 普通預金に直すと仕訳も追随', [ctx.fund, ctx.liability, app.movementsOf(ctx)[1].node], ['bank', undefined, 'fund:bank']);
+
+/* ---------- 8. 支払い方法が未設定の既存資産(Q8: 自動では仕訳を作らず、画面で設定を案内) ---------- */
+reset({ openingBank: 1000000, openingDate: '2025-01-01' });
+var legacy = { id: 'fa_old', name: '旧PC', cost: 240000, usefulLifeYears: 4, acquisitionDate: '2025-04-10', disposalDate: '' };
+app.state.fixedAssets.push(legacy);
+check('未設定の資産: 案内が出る/仕訳は自動で作らない', [app.assetsWithoutPayment().length, app.assetPaymentNotice().indexOf('支払い方法が未設定の固定資産が 1 件') >= 0, app.state.transactions.length], [1, true, 0]);
+legacy.payFund = 'bank'; app.syncPurchaseTransaction(legacy); // 画面で支払い方法を設定して保存したとき
+var bsL = app.computeBS('2025-12-31');
+check('未設定の資産: 設定すると仕訳ができ、案内が消え、繰越利益 = 所得', [app.state.transactions.length, app.assetPaymentNotice(), bsL.retainedEarnings === app.computePL(2025).net], [1, '', true]);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';
