@@ -76,7 +76,8 @@ function movementsOf(tx) {
   if (tx.kind === 'pay_liability') return [{ node: 'liability:' + tx.liability, side: 'debit', amt: amt }, { node: 'fund:' + tx.fund, side: 'credit', amt: amt }];
   if (tx.kind === 'borrow') return [{ node: 'fund:' + tx.fund, side: 'debit', amt: amt }, { node: 'liability:loan', side: 'credit', amt: amt }];
   if (tx.kind === 'repay') return [{ node: 'liability:loan', side: 'debit', amt: amt }, { node: 'fund:' + tx.fund, side: 'credit', amt: amt }];
-  if (tx.kind === 'asset_purchase') return [{ node: 'asset:fixed', side: 'debit', amt: amt }, { node: 'fund:' + tx.fund, side: 'credit', amt: amt }];
+  // 固定資産の購入: 貸方は支払った現金・普通預金、あとで払う場合は未払金(tx.liability)
+  if (tx.kind === 'asset_purchase') return [{ node: 'asset:fixed', side: 'debit', amt: amt }, { node: tx.liability ? 'liability:' + tx.liability : 'fund:' + tx.fund, side: 'credit', amt: amt }];
   return [];
 }
 function nodeLabel(node) {
@@ -115,7 +116,8 @@ function primaryLabel(t) {
 }
 function txSign(t) {
   if (['income', 'contribution', 'borrow'].indexOf(t.kind) >= 0) return '+';
-  if (['expense', 'purchase', 'drawing', 'repay', 'pay_liability', 'asset_purchase'].indexOf(t.kind) >= 0) return '−';
+  if (t.kind === 'asset_purchase') return t.liability ? '' : '−'; // 未払金での購入はお金が出ていかない
+  if (['expense', 'purchase', 'drawing', 'repay', 'pay_liability'].indexOf(t.kind) >= 0) return '−';
   return '';
 }
 function fundBalance(fundKey, asOfDate) {
@@ -401,7 +403,9 @@ const Store = {
   async updateTransaction(id, patch) {
     const idx = state.transactions.findIndex(function (t) { return t.id === id; }); if (idx < 0) return;
     const before = state.transactions[idx];
-    state.transactions[idx] = Object.assign({}, before, patch);
+    const next = Object.assign({}, before, patch);
+    Object.keys(next).forEach(function (k) { if (next[k] === undefined) delete next[k]; });
+    state.transactions[idx] = next;
     await saveAndLog('update', 'transaction', before, state.transactions[idx]);
   },
   async deleteTransaction(id) {
@@ -754,8 +758,9 @@ function assetFormHtml(a) {
     '<div class="field"><label>支払い方法</label><select id="af-pay">' +
       (a.id && !a.payFund ? '<option value="" selected>記録しない(登録済みの資産)</option>' : '') +
       '<option value="cash"' + (a.payFund === 'cash' ? ' selected' : '') + '>現金</option>' +
-      '<option value="bank"' + (a.payFund === 'bank' || (!a.id && !a.payFund) ? ' selected' : '') + '>普通預金</option></select>' +
-      '<div class="note" style="margin-top:6px;">保存すると、支払いの仕訳(固定資産/支払い方法)を自動で作ります。取得日・取得価額・支払い方法を直すと仕訳も直ります。</div></div>' +
+      '<option value="bank"' + (a.payFund === 'bank' || (!a.id && !a.payFund) ? ' selected' : '') + '>普通預金</option>' +
+      '<option value="accrued"' + (a.payFund === 'accrued' ? ' selected' : '') + '>未払金(あとで払う・分割・カード払い)</option></select>' +
+      '<div class="note" style="margin-top:6px;">保存すると、支払いの仕訳(固定資産/支払い方法)を自動で作ります。取得日・取得価額・支払い方法を直すと仕訳も直ります。<br>未払金の場合、実際の支払い(分割払い・カードの引き落としなど)は、そのつど取引の入力で「買掛金・未払金を支払う」(未払金)として記録してください。減価償却は支払日ではなく取得日(使い始めた日)から始まります。</div></div>' +
     '<div class="field-row"><div class="field"><label>耐用年数(年・2〜50)</label><input type="number" id="af-life" min="2" max="50" step="1" value="' + esc(a.usefulLifeYears) + '"></div>' +
     '<div class="field"><label>除却・売却日(任意)</label><input type="date" id="af-disposal" value="' + esc(a.disposalDate || '') + '"></div></div>' +
     '<div class="field"><label>処分の種類</label><div class="radio-group">' +
@@ -780,7 +785,7 @@ function openAssetModal(asset) {
   }); });
   document.getElementById('af-save').addEventListener('click', async function () {
     const doc = { name: val('af-name'), acquisitionDate: val('af-date'), cost: Number(val('af-cost')) || 0, usefulLifeYears: Number(val('af-life')), disposalDate: val('af-disposal') || null };
-    const pay = val('af-pay'); doc.payFund = (pay === 'cash' || pay === 'bank') ? pay : undefined;
+    const pay = val('af-pay'); doc.payFund = (pay === 'cash' || pay === 'bank' || pay === 'accrued') ? pay : undefined;
     if (doc.disposalDate) {
       doc.disposalType = dtype();
       if (doc.disposalType === 'sale') { doc.saleAmount = Number(val('af-sale-amount')) || 0; doc.saleFund = val('af-sale-fund') === 'cash' ? 'cash' : 'bank'; }
@@ -803,8 +808,10 @@ function linkedTxs(assetId) { return state.transactions.filter(function (t) { re
 async function syncPurchaseTransaction(asset) {
   const linked = linkedPurchaseTx(asset.id);
   if (!asset.payFund) { if (linked) await Store.deleteTransaction(linked.id); return; }
-  const payload = { kind: 'asset_purchase', date: asset.acquisitionDate, amount: Number(asset.cost) || 0, fund: asset.payFund, memo: '固定資産の購入(' + asset.name + ')', linkedAssetId: asset.id };
-  if (linked) await Store.updateTransaction(linked.id, payload); else await Store.addTransaction(payload);
+  const payload = { kind: 'asset_purchase', date: asset.acquisitionDate, amount: Number(asset.cost) || 0, memo: '固定資産の購入(' + asset.name + ')', linkedAssetId: asset.id };
+  // 未払金なら貸方は未払金(fund は持たない)、現金・普通預金なら貸方はその資金(liability は持たない)
+  if (asset.payFund === 'accrued') { payload.liability = 'accrued'; payload.fund = undefined; } else { payload.fund = asset.payFund; payload.liability = undefined; }
+  if (linked) await Store.updateTransaction(linked.id, payload); else { Object.keys(payload).forEach(function (k) { if (payload[k] === undefined) delete payload[k]; }); await Store.addTransaction(payload); }
 }
 async function syncSaleTransaction(asset) {
   const linked = linkedSaleTx(asset.id);
@@ -1278,7 +1285,7 @@ function migrateBackup(raw) {
     v = 3;
   }
   if (v < 4) {
-    // v3 → v4: 取引の区分に「固定資産の購入」(asset_purchase)と、固定資産に支払い方法(payFund)を追加。
+    // v3 → v4: 取引の区分に「固定資産の購入」(asset_purchase)と、固定資産に支払い方法(payFund: cash / bank / accrued=未払金)を追加。
     // 既存の固定資産は支払いが記録されていないため、payFund なしのまま(画面で設定できる)
     v = 4;
   }
@@ -1339,7 +1346,7 @@ function sanitizeBackup(raw) {
     if (a.disposalType !== undefined && a.disposalType !== 'retire' && a.disposalType !== 'sale') delete a.disposalType;
     if (a.disposalDate && !a.disposalType) a.disposalType = 'retire';
     if (a.saleFund !== undefined && a.saleFund !== 'cash' && a.saleFund !== 'bank') delete a.saleFund;
-    if (a.payFund !== undefined && a.payFund !== 'cash' && a.payFund !== 'bank') delete a.payFund;
+    if (a.payFund !== undefined && a.payFund !== 'cash' && a.payFund !== 'bank' && a.payFund !== 'accrued') delete a.payFund;
   });
   if (raw.inventoryYearEnd && typeof raw.inventoryYearEnd === 'object') {
     out.inventoryYearEnd = {};

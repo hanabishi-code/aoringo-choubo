@@ -163,4 +163,25 @@ check('購入: 金額・日付・支払い方法を直すと仕訳も追随', pt
 pc.payFund = undefined; app.syncPurchaseTransaction(pc);
 check('購入: 支払いを記録しない → 連動する仕訳は削除', app.state.transactions.filter(function (t) { return t.linkedAssetId === 'fa_2'; }).length, 0);
 
+/* ---------- 7. 12月にカードで購入 → 翌年1月に引き落とし(未払金) ---------- */
+reset({ openingCash: 0, openingBank: 1000000, openingDate: '2025-01-01' });
+var card = { id: 'fa_3', name: 'カメラ', cost: 240000, usefulLifeYears: 4, acquisitionDate: '2025-12-15', disposalDate: '', payFund: 'accrued' };
+app.state.fixedAssets.push(card);
+app.syncPurchaseTransaction(card);
+var ctx = app.state.transactions.filter(function (t) { return t.linkedAssetId === 'fa_3'; })[0];
+check('未払金で購入: 仕訳は 借方 固定資産 / 貸方 未払金', app.movementsOf(ctx).map(function (x) { return x.side + ':' + x.node; }), ['debit:asset:fixed', 'credit:liability:accrued']);
+tx('pay_liability', '2026-01-27', 240000, { fund: 'bank', liability: 'accrued' }); // 翌月のカード引き落とし
+var b25 = app.computeBS('2025-12-31'), p25 = app.computePL(2025), b26 = app.computeBS('2026-12-31'), p26 = app.computePL(2026);
+// 償却は取得した12月から: 240,000 × 0.25 × 1/12 = 5,000
+check('未払金で購入: 償却は取得月(12月)から 2025年 5,000 / 2026年 60,000', [p25.expenseTotals.depreciation, p26.expenseTotals.depreciation], [5000, 60000]);
+check('未払金で購入: 2025年末 未払金 240,000・預金 1,000,000(まだ払っていない)・簿価 235,000', [b25.accrued, b25.bank, b25.fixedAssetsVal], [240000, 1000000, 235000]);
+check('未払金で購入: 2025年末 資産合計 = 負債 + 純資産', b25.assetsTotal, b25.liabilitiesTotal + b25.equityTotalVal);
+check('未払金で購入: 2025年末 繰越利益 = 所得(−5,000)', b25.retainedEarnings, p25.net);
+check('未払金で購入: 2026年末 未払金 0・預金 760,000(1月に引き落とし)', [b26.accrued, b26.bank], [0, 760000]);
+check('未払金で購入: 繰越利益の増減(2025末→2026末)= 2026年の所得(−60,000)', b26.retainedEarnings - b25.retainedEarnings, p26.net);
+// 支払い方法を未払金 → 普通預金に直すと、貸方も普通預金に変わる(liability は残らない)
+card.payFund = 'bank'; app.syncPurchaseTransaction(card);
+ctx = app.state.transactions.filter(function (t) { return t.linkedAssetId === 'fa_3'; })[0];
+check('支払い方法を未払金 → 普通預金に直すと仕訳も追随', [ctx.fund, ctx.liability, app.movementsOf(ctx)[1].node], ['bank', undefined, 'fund:bank']);
+
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';
