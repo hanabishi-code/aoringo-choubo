@@ -46,7 +46,7 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function
 function accountLabel(type, key) { const list = ACCOUNTS[type] || []; const f = list.find(function (a) { return a.key === key; }); return f ? f.label : (key || ''); }
 function fundLabel(key) { return accountLabel('fund', key); }
 function defaultSettings() {
-  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto' };
+  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto', depreciationRounding: 'floor' };
 }
 function toast(msg, ms) {
   const wrap = document.getElementById('toast-wrap'); const el = document.createElement('div');
@@ -155,8 +155,14 @@ function annualStraightLine(cost, life) {
   const rate = STRAIGHT_LINE_RATES[life];
   return rate ? cost * rate : Math.max(0, cost - 1) / life;
 }
-// 償却費の1円未満の端数処理(月数按分の結果にかける)。現在は四捨五入
-function roundDepreciation(x) { return Math.round(x); }
+// 償却費の1円未満の端数処理(月数按分の結果にかける)。設定「減価償却の端数処理」で選ぶ。初期値は切り捨て
+const DEPRECIATION_ROUNDING = { floor: '切り捨て', round: '四捨五入', ceil: '切り上げ' };
+function roundDepreciation(x) {
+  const mode = state.settings && state.settings.depreciationRounding;
+  // 浮動小数点の誤差(例: 69583.99999…)で1円ずれないよう、先に小数第6位で丸めてから端数処理する
+  const v = Math.round(x * 1e6) / 1e6;
+  return mode === 'round' ? Math.round(v) : mode === 'ceil' ? Math.ceil(v) : Math.floor(v);
+}
 function depreciationSchedule(asset) {
   const cost = Number(asset.cost) || 0;
   const life = Math.max(1, Number(asset.usefulLifeYears) || 1);
@@ -973,6 +979,11 @@ function viewSettings() {
       '<div class="field"><label>普通預金(開始時点)</label><input type="number" id="s-openingBank" value="' + esc(s.openingBank) + '"></div></div>' +
       '<button class="btn secondary" id="save-opening">保存する</button>' +
     '</section>' +
+    '<section class="block"><h2>減価償却の端数処理</h2>' +
+      '<div class="note">月数で按分した償却費の1円未満の扱いです。税理士・税務署に確認のうえ選んでください(初期値は切り捨て)。<br><strong>変更するとすべての年の償却費が計算し直されるため、申告済みの年の数字と合わなくなります。年度の途中や申告後には変えないでください。</strong></div>' +
+      '<div class="field"><select id="s-depRounding">' + Object.keys(DEPRECIATION_ROUNDING).map(function (k) { return '<option value="' + k + '"' + (s.depreciationRounding === k ? ' selected' : '') + '>' + DEPRECIATION_ROUNDING[k] + '</option>'; }).join('') + '</select></div>' +
+      '<button class="btn secondary" id="save-depRounding">保存する</button>' +
+    '</section>' +
     '<section class="block"><h2>データの書き出し・バックアップ</h2>' + storageFlag() +
       '<div style="display:flex; flex-direction:column; gap:10px;">' +
         '<button class="btn secondary" id="export-tx-csv">取引一覧をCSVで書き出す</button>' +
@@ -1044,6 +1055,12 @@ function bindViewEvents() {
 
   const saveBiz = document.getElementById('save-business');
   if (saveBiz) saveBiz.addEventListener('click', function () { Store.saveSettings({ businessName: val('s-businessName'), ownerName: val('s-ownerName'), address: val('s-address'), phone: val('s-phone'), invoiceRegNo: val('s-invoiceRegNo'), bankInfo: val('s-bankInfo') }).then(renderShell); });
+  const saveDepRounding = document.getElementById('save-depRounding');
+  if (saveDepRounding) saveDepRounding.addEventListener('click', async function () {
+    const v = val('s-depRounding'); if (v === state.settings.depreciationRounding) { toast('変更はありません'); return; }
+    if (!(await confirmDialog('端数処理を「' + DEPRECIATION_ROUNDING[v] + '」に変えると、すべての年の償却費が計算し直されます。申告済みの年の数字と合わなくなることがあります。変更しますか?', '変更する'))) { renderView(); return; }
+    Store.saveSettings({ depreciationRounding: v }).then(renderShell);
+  });
   const saveOpening = document.getElementById('save-opening');
   if (saveOpening) saveOpening.addEventListener('click', function () { Store.saveSettings({ openingDate: val('s-openingDate'), openingCash: Number(val('s-openingCash')) || 0, openingBank: Number(val('s-openingBank')) || 0 }).then(renderShell); });
   const expTx = document.getElementById('export-tx-csv'); if (expTx) expTx.addEventListener('click', exportTransactionsCsv);
@@ -1225,6 +1242,7 @@ function sanitizeBackup(raw) {
       if (!Object.prototype.hasOwnProperty.call(raw.settings, k)) return;
       const v = raw.settings[k];
       if (typeof def[k] === 'number') { const n = Number(v); if (Number.isFinite(n)) out.settings[k] = n; }
+      else if (k === 'depreciationRounding') { if (Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, v)) out.settings[k] = v; }
       else if (typeof v === 'string') out.settings[k] = v.slice(0, 2000);
     });
   }
@@ -1285,7 +1303,7 @@ const HISTORY_TARGETS = { transaction: '取引', invoice: '請求書', fixedAsse
 const HISTORY_FIELD_LABELS = { kind: '種類', date: '日付', amount: '金額', memo: 'メモ', fund: '入出金', account: '勘定科目', liability: '負債科目', accountType: '科目区分',
   number: '請求書番号', issueDate: '発行日', dueDate: '支払期限', clientName: '取引先', clientAddress: '取引先住所', items: '明細', taxRate: '税率', notes: '備考', status: '状態',
   name: '名称', acquisitionDate: '取得日', cost: '取得価額', usefulLifeYears: '耐用年数', disposalDate: '除却日', opening: '期首棚卸高', closing: '期末棚卸高',
-  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', theme: '表示テーマ', receiptAssetId: 'レシート画像' };
+  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', receiptAssetId: 'レシート画像' };
 function historySummary(e) {
   const d = e.after || e.before || {};
   if (e.target === 'transaction') return (d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.memo ? ' ' + d.memo : '');

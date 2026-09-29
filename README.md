@@ -97,7 +97,14 @@ cargo tauri build                # 配布用(.app / .dmg)
 osascript -l JavaScript tests/check_calc.js          # 仕訳・減価償却・損益計算書・貸借対照表
 osascript -l JavaScript tests/check_import.js        # バックアップ取り込みの検証
 osascript -l JavaScript tests/check_receipt_ipc.js   # レシート画像の受け渡し
+osascript -l JavaScript tests/check_history.js       # 変更履歴(強制終了後の後始末の判定)
 ```
+
+## 減価償却の計算について
+
+- 定額法(平成19年4月1日以後に取得した資産)で、償却率は「減価償却資産の耐用年数等に関する省令」別表第八(耐用年数 2〜50年)を使います
+- 取得した年・除却した年は月数で按分します。**1円未満の端数処理(切り捨て / 四捨五入 / 切り上げ)は、税理士・税務署に確認のうえ設定画面で選んでください(初期値は切り捨て)**
+- 端数処理を変えると、過去の年の償却費も計算し直されます。申告済みの年と数字が合わなくなるため、年度の途中や申告後には変えないでください
 
 ## 免責事項
 

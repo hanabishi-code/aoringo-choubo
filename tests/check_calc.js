@@ -48,9 +48,27 @@ check('減価償却 1,000,000円/6年/1月取得(償却率 0.167)',
 check('減価償却 300,000円/3年/1月取得(償却率 0.334)',
   amounts({ cost: 300000, usefulLifeYears: 3, acquisitionDate: '2025-01-20', disposalDate: '' }, [2025, 2026, 2027, 2028]),
   [100200, 100200, 99599, 0]);
-// 100万円・6年・8月取得: 初年度 5か月 = 1,000,000 × 0.167 × 5/12 = 69,583.33… → 四捨五入で 69,583(端数処理はユーザーに確認中)
-check('減価償却 1,000,000円/6年/8月取得の初年度(5か月)',
-  amounts({ cost: 1000000, usefulLifeYears: 6, acquisitionDate: '2025-08-01', disposalDate: '' }, [2025]), [69583]);
+// 端数処理(設定 depreciationRounding)。100万円・6年・8月取得の初年度 5か月 = 1,000,000 × 0.167 × 5/12 = 69,583.33…
+// 10万円・4年・12月取得の初年度 1か月 = 100,000 × 0.25 × 1/12 = 2,083.33… / 30万円・6年・6月取得 7か月 = 29,225 ちょうど
+var roundingCases = [
+  ['floor', [69583, 2083, 29225]], ['round', [69583, 2083, 29225]], ['ceil', [69584, 2084, 29225]]
+];
+var assets = [
+  { cost: 1000000, usefulLifeYears: 6, acquisitionDate: '2025-08-01', disposalDate: '' },
+  { cost: 100000, usefulLifeYears: 4, acquisitionDate: '2025-12-01', disposalDate: '' },
+  { cost: 300000, usefulLifeYears: 6, acquisitionDate: '2025-06-01', disposalDate: '' }
+];
+roundingCases.forEach(function (c) {
+  app.state.settings = Object.assign(app.defaultSettings(), { depreciationRounding: c[0] });
+  check('端数処理「' + c[0] + '」: 初年度の償却費', assets.map(function (a) { return amounts(a, [2025])[0]; }), c[1]);
+});
+// 四捨五入で切り上がるケース: 50万円・6年・11月取得 2か月 = 500,000 × 0.167 × 2/12 = 13,916.66…
+app.state.settings = Object.assign(app.defaultSettings(), { depreciationRounding: 'floor' });
+check('端数処理「floor」: 13,916.66… → 13,916', amounts({ cost: 500000, usefulLifeYears: 6, acquisitionDate: '2025-11-01', disposalDate: '' }, [2025]), [13916]);
+app.state.settings = Object.assign(app.defaultSettings(), { depreciationRounding: 'round' });
+check('端数処理「round」: 13,916.66… → 13,917', amounts({ cost: 500000, usefulLifeYears: 6, acquisitionDate: '2025-11-01', disposalDate: '' }, [2025]), [13917]);
+app.state.settings = app.defaultSettings();
+check('端数処理の初期値は切り捨て', app.defaultSettings().depreciationRounding, 'floor');
 
 /* ---------- 3. 除却した固定資産は、除却後の貸借対照表に残らない ---------- */
 reset({ openingDate: '2025-01-01' });
