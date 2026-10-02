@@ -573,7 +573,7 @@ function renderShell() {
   const tabsHtml = TABS.map(function (t) { return '<button data-tab=\"' + esc(t.id) + '\" class="' + (t.id === currentTab ? 'active' : '') + '">' + t.label + '</button>'; }).join('');
   document.getElementById('app').innerHTML =
     '<header class="app-header"><div class="header-row">' + hankoSvg() +
-      '<div class="brand"><h1>経理ノート</h1><div class="sub">' + esc(state.settings.businessName || '個人事業主の複式簿記') + '</div></div>' +
+      '<div class="brand"><h1>青りんご帳簿</h1><div class="sub">' + esc(state.settings.businessName || '個人事業主の複式簿記') + '</div></div>' +
       '<div class="balance-chip"><div class="lbl">現金+預金残高</div><div class="val num">' + yen(cash + bank) + '</div></div>' +
     '</div><nav class="tabs">' + tabsHtml + '</nav></header><main id="view"></main>';
   document.querySelectorAll('nav.tabs button').forEach(function (b) { b.addEventListener('click', function () { currentTab = b.dataset.tab; editingTxId = null; renderShell(); }); });
@@ -1283,7 +1283,7 @@ async function exportBackup() {
   const receipts = {}; let missing = 0;
   for (const id of ids) { try { receipts[id] = bytesToBase64(await readReceiptBytes(id)); } catch (e) { missing++; } }
   const data = { app: 'keiri-note', schemaVersion: SCHEMA_VERSION, transactions: state.transactions, invoices: state.invoices, settings: state.settings, fixedAssets: state.fixedAssets, inventoryYearEnd: state.inventoryYearEnd, receipts: receipts, exportedAt: new Date().toISOString() };
-  const ok = await downloadFile('経理ノート_バックアップ_' + todayStr() + '.json', JSON.stringify(data, null, 2));
+  const ok = await downloadFile('青りんご帳簿_バックアップ_' + todayStr() + '.json', JSON.stringify(data, null, 2));
   if (ok) { try { localStorage.setItem('keirinote_lastBackupAt', new Date().toISOString()); } catch (e) {} }
   if (ok && missing) toast('見つからない画像が ' + missing + ' 枚ありました(それ以外は書き出しました)');
 }
@@ -1354,8 +1354,9 @@ function cleanRecords(arr, check) {
     .filter(function (r) { return r && typeof r === 'object' && !Array.isArray(r) && typeof r.id === 'string' && ID_RE.test(r.id) && (!check || check(r)); });
 }
 function sanitizeBackup(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw importError('経理ノートのバックアップファイルではありません');
-  if (raw.app !== undefined && raw.app !== 'keiri-note') throw importError('経理ノートのバックアップファイルではありません');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw importError('青りんご帳簿のバックアップファイルではありません');
+  // app の値は旧名(経理ノート)のときから 'keiri-note' のまま(変えると以前のバックアップを取り込めなくなる)
+  if (raw.app !== undefined && raw.app !== 'keiri-note') throw importError('青りんご帳簿のバックアップファイルではありません');
   if (typeof raw.schemaVersion === 'number' && raw.schemaVersion > SCHEMA_VERSION) throw importError('新しい版で作られたバックアップです。アプリを更新してください');
   raw = migrateBackup(raw);
   const out = {};
