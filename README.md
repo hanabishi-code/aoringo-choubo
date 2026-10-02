@@ -95,6 +95,7 @@ cargo tauri build                # 配布用(.app / .dmg)
 - `src/` — 画面(`index.html` / `styles.css` / `app.js`)
 - `src-tauri/` — Mac アプリ側(Tauri v2 / Rust)。データの読み書き・自動バックアップ・変更履歴・画像の保存・保存ダイアログ
 - `legacy/` — 旧ブラウザ版(参考用)
+- `assets/icon/` — アイコンの元データ(`icon-original.svg`、macOS 用に余白を付けた `icon-macos.svg`、1024px の PNG)。`cargo tauri icon assets/icon/icon-1024.png` で `src-tauri/icons/` を作り直せます
 - `tests/` — テストとテスト用データ
 
 ### テスト
