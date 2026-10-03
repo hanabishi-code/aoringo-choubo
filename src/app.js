@@ -50,7 +50,7 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function
 function accountLabel(type, key) { const list = ACCOUNTS[type] || []; const f = list.find(function (a) { return a.key === key; }); return f ? f.label : (key || ''); }
 function fundLabel(key) { return accountLabel('fund', key); }
 function defaultSettings() {
-  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto', depreciationRounding: 'floor', taxMethod: '', mainBusinessType: 0, taxReview: '' };
+  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto', depreciationRounding: 'floor', invoiceTaxRounding: 'floor', taxMethod: '', mainBusinessType: 0, taxReview: '' };
 }
 function toast(msg, ms) {
   const wrap = document.getElementById('toast-wrap'); const el = document.createElement('div');
@@ -219,12 +219,13 @@ function annualStraightLine(cost, life) {
 }
 // 償却費の1円未満の端数処理(月数按分の結果にかける)。設定「減価償却の端数処理」で選ぶ。初期値は切り捨て
 const DEPRECIATION_ROUNDING = { floor: '切り捨て', round: '四捨五入', ceil: '切り上げ' };
-function roundDepreciation(x) {
-  const mode = state.settings && state.settings.depreciationRounding;
-  // 浮動小数点の誤差(例: 69583.99999…)で1円ずれないよう、先に小数第6位で丸めてから端数処理する
+// 1円未満の端数処理(floor = 切り捨て / round = 四捨五入 / ceil = 切り上げ)。
+// 浮動小数点の誤差(例: 69583.99999…)で1円ずれないよう、先に小数第6位で丸めてから端数処理する
+function roundBy(mode, x) {
   const v = Math.round(x * 1e6) / 1e6;
   return mode === 'round' ? Math.round(v) : mode === 'ceil' ? Math.ceil(v) : Math.floor(v);
 }
+function roundDepreciation(x) { return roundBy(state.settings && state.settings.depreciationRounding, x); }
 function depreciationSchedule(asset) {
   const cost = Number(asset.cost) || 0;
   const life = Math.max(1, Number(asset.usefulLifeYears) || 1);
@@ -1264,13 +1265,15 @@ function viewInvoiceList() {
     '</section>'
   );
 }
-// 請求書の合計。税率ごとに対価の合計と消費税額を出す(端数処理は1請求書・1税率につき1回、四捨五入)
+// 請求書の合計。税率ごとに対価の合計と消費税額を出す(端数処理は1請求書・1税率につき1回)。
+// 端数処理は請求書ごとに作成時の設定を保存した taxRounding を使う(あとで設定を変えても発行済みの金額は変わらない)。
+// taxRounding のない請求書は、以前の計算(四捨五入)のまま
 function itemRate(inv, it) { const r = Number(it.taxRate !== undefined ? it.taxRate : inv.taxRate); return [10, 8, 0].indexOf(r) >= 0 ? r : 10; }
 function invoiceTotals(inv) {
   const groups = {};
   (inv.items || []).forEach(function (it) { const r = itemRate(inv, it); groups[r] = (groups[r] || 0) + (Number(it.qty) || 0) * (Number(it.unitPrice) || 0); });
   const byRate = Object.keys(groups).map(Number).sort(function (a, b) { return b - a; }).map(function (r) {
-    const sub = Math.round(groups[r]); return { rate: r, subtotal: sub, tax: Math.round(sub * r / 100) };
+    const sub = Math.round(groups[r]); return { rate: r, subtotal: sub, tax: roundBy(inv.taxRounding || 'round', sub * r / 100) };
   });
   const subtotal = byRate.reduce(function (x, g) { return x + g.subtotal; }, 0), tax = byRate.reduce(function (x, g) { return x + g.tax; }, 0);
   return { byRate: byRate, subtotal: subtotal, tax: tax, total: subtotal + tax };
@@ -1310,6 +1313,7 @@ function viewInvoiceForm() {
       '</div>' +
       '<div class="field"><label>備考</label><textarea id="inv-notes">' + esc(d.notes) + '</textarea></div>' +
       '<div class="field"><label>添付ファイル(送った請求書の控え PDF など。任意)</label>' + attachWidgetHtml('inv', d.attachments || []) + '</div>' +
+      '<div class="note">消費税の端数処理: ' + esc(DEPRECIATION_ROUNDING[d.taxRounding || 'round']) + '(1枚・1税率につき1回。この請求書を作ったときの設定)</div>' +
       '<div class="kpi-row"><div class="kpi" style="flex:2;"><div class="lbl">税率ごとの合計</div><div class="val" id="inv-byrate" style="font-size:13px;">' + invoiceByRateHtml(t) + '</div></div>' +
       '<div class="kpi"><div class="lbl accent">合計</div><div class="val num accent" id="inv-total">' + money(t.total) + '</div></div></div>' +
       '<div style="display:flex; gap:10px;"><button class="btn block" id="inv-save">保存する</button><button class="btn secondary" id="inv-cancel">キャンセル</button></div>' +
@@ -1445,8 +1449,13 @@ function viewSettings() {
       '<div class="note">2割特例: インボイス登録を機に課税事業者になった方が対象で、個人事業者は令和8年分(2026年分)まで。3割特例: 同じく令和9年分・令和10年分(2027・2028年分)。<br>本則課税は、この版では納付税額を計算しません(経費の税区分は記録できます)。<br>税率の表: ' + TAX_RATES.map(function (r) { return r.from + ' から 標準 ' + r.standard + '%・軽減 ' + r.reduced + '%'; }).join(' / ') + '</div>' +
       '<button class="btn secondary" id="save-tax">保存する</button>' +
     '</section>' +
+    '<section class="block"><h2>請求書の消費税の端数処理</h2>' +
+      '<div class="note">請求書に記載する消費税額の1円未満の扱いです(1枚の請求書・1つの税率につき1回)。初期値は切り捨て。<br><strong>変えても、すでに作った請求書の金額は変わりません</strong>(請求書ごとに作成時の端数処理を保存しています)。これから作る請求書に使われます。</div>' +
+      '<div class="field"><select id="s-invRounding">' + Object.keys(DEPRECIATION_ROUNDING).map(function (k) { return '<option value="' + k + '"' + ((s.invoiceTaxRounding || 'floor') === k ? ' selected' : '') + '>' + DEPRECIATION_ROUNDING[k] + '</option>'; }).join('') + '</select></div>' +
+      '<button class="btn secondary" id="save-invRounding">保存する</button>' +
+    '</section>' +
     '<section class="block"><h2>減価償却の端数処理</h2>' +
-      '<div class="note">月数で按分した償却費の1円未満の扱いです。税理士・税務署に確認のうえ選んでください(初期値は切り捨て)。<br><strong>変更するとすべての年の償却費が計算し直されるため、申告済みの年の数字と合わなくなります。年度の途中や申告後には変えないでください。</strong></div>' +
+      '<div class="note">固定資産の減価償却費を月数で按分したときの1円未満の扱いです(請求書の消費税とは別の設定です)。税理士・税務署に確認のうえ選んでください(初期値は切り捨て)。<br><strong>変更するとすべての年の償却費が計算し直されるため、申告済みの年の数字と合わなくなります。年度の途中や申告後には変えないでください。</strong></div>' +
       '<div class="field"><select id="s-depRounding">' + Object.keys(DEPRECIATION_ROUNDING).map(function (k) { return '<option value="' + k + '"' + (s.depreciationRounding === k ? ' selected' : '') + '>' + DEPRECIATION_ROUNDING[k] + '</option>'; }).join('') + '</select></div>' +
       '<button class="btn secondary" id="save-depRounding">保存する</button>' +
     '</section>' +
@@ -1507,7 +1516,7 @@ function bindViewEvents() {
   if (newInv) newInv.addEventListener('click', function () {
     state.settings.invoiceSeq = (state.settings.invoiceSeq || 0) + 1;
     const num = todayStr().slice(0, 4) + '-' + String(state.settings.invoiceSeq).padStart(3, '0');
-    invoiceDraft = { number: num, issueDate: todayStr(), dueDate: '', clientName: '', clientAddress: '', transactionDate: '', items: [{ name: '', qty: 1, unitPrice: 0, taxRate: 10 }], taxRate: 10, notes: '', status: '下書き' };
+    invoiceDraft = { number: num, issueDate: todayStr(), dueDate: '', clientName: '', clientAddress: '', transactionDate: '', taxRounding: state.settings.invoiceTaxRounding || 'floor', items: [{ name: '', qty: 1, unitPrice: 0, taxRate: 10 }], taxRate: 10, notes: '', status: '下書き' };
     editingInvoiceId = null; renderView();
   });
   document.querySelectorAll('[data-edit-inv]').forEach(function (a) { a.addEventListener('click', function () { const inv = state.invoices.find(function (i) { return i.id === a.dataset.editInv; }); invoiceDraft = JSON.parse(JSON.stringify(inv)); editingInvoiceId = inv.id; renderView(); }); });
@@ -1537,6 +1546,8 @@ function bindViewEvents() {
   document.querySelectorAll('[data-tax-review-done]').forEach(function (b) { b.addEventListener('click', function () { Store.saveSettings({ taxReview: '' }).then(renderShell); }); });
   const saveInterim = document.getElementById('save-interim');
   if (saveInterim) saveInterim.addEventListener('click', function () { Store.setTaxInterim(Number(saveInterim.dataset.year), { national: Math.max(0, Number(val('ti-national')) || 0), local: Math.max(0, Number(val('ti-local')) || 0) }).then(renderView); });
+  const saveInvRounding = document.getElementById('save-invRounding');
+  if (saveInvRounding) saveInvRounding.addEventListener('click', function () { Store.saveSettings({ invoiceTaxRounding: val('s-invRounding') }).then(renderShell); });
   const saveDepRounding = document.getElementById('save-depRounding');
   if (saveDepRounding) saveDepRounding.addEventListener('click', async function () {
     const v = val('s-depRounding'); if (v === state.settings.depreciationRounding) { toast('変更はありません'); return; }
@@ -1642,7 +1653,7 @@ async function exportBackup() {
   if (ok && missing) toast('見つからない画像が ' + missing + ' 枚ありました(それ以外は書き出しました)');
 }
 /* ============================== バックアップの検証 ============================== */
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const MAX_RECEIPT_BYTES = 20 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+\/]*={0,2}$/;
 // 旧版のデータを現在の形式に移行する。版ごとに1段ずつ上げる
@@ -1697,6 +1708,14 @@ function migrateBackup(raw) {
       return o;
     });
     v = 6;
+  }
+  if (v < 7) {
+    // v6 → v7: 請求書ごとに消費税の端数処理(taxRounding)を保存する。以前の請求書は四捨五入で計算していたので、
+    // 金額が変わらないよう 'round' を入れる。設定(invoiceTaxRounding)の初期値は切り捨てで、これから作る請求書に使う
+    if (Array.isArray(out.invoices)) out.invoices = out.invoices.map(function (inv) {
+      return (inv && typeof inv === 'object' && inv.taxRounding === undefined) ? Object.assign({}, inv, { taxRounding: 'round' }) : inv;
+    });
+    v = 7;
   }
   out.schemaVersion = v;
   return out;
@@ -1783,6 +1802,7 @@ function sanitizeBackup(raw) {
   if (out.invoices) out.invoices.forEach(function (inv) {
     if (Array.isArray(inv.items)) inv.items.forEach(function (it) { if (it && typeof it === 'object' && [10, 8, 0].indexOf(Number(it.taxRate)) < 0) it.taxRate = 10; });
     if (inv.transactionDate !== undefined) inv.transactionDate = String(inv.transactionDate).slice(0, 40);
+    if (inv.taxRounding !== undefined && !Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, inv.taxRounding)) inv.taxRounding = 'round';
   });
   if (raw.inventoryYearEnd && typeof raw.inventoryYearEnd === 'object') {
     out.inventoryYearEnd = {};
@@ -1795,7 +1815,7 @@ function sanitizeBackup(raw) {
       const v = raw.settings[k];
       if (k === 'mainBusinessType') { const n = Number(v); if (n === 0 || BUSINESS_TYPES[n]) out.settings[k] = n; }
       else if (typeof def[k] === 'number') { const n = Number(v); if (Number.isFinite(n)) out.settings[k] = n; }
-      else if (k === 'depreciationRounding') { if (Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, v)) out.settings[k] = v; }
+      else if (k === 'depreciationRounding' || k === 'invoiceTaxRounding') { if (Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, v)) out.settings[k] = v; }
       else if (k === 'taxMethod') { if (Object.prototype.hasOwnProperty.call(TAX_METHODS, v)) out.settings[k] = v; }
       else if (k === 'taxReview') { if (v === '' || v === 'pending') out.settings[k] = v; }
       else if (typeof v === 'string') out.settings[k] = v.slice(0, 2000);
@@ -1865,7 +1885,7 @@ const HISTORY_TARGETS = { transaction: '取引', invoice: '請求書', fixedAsse
 const HISTORY_FIELD_LABELS = { kind: '種類', date: '日付', amount: '金額', memo: 'メモ', fund: '入出金', account: '勘定科目', liability: '負債科目', accountType: '科目区分',
   number: '請求書番号', issueDate: '発行日', dueDate: '支払期限', clientName: '取引先', clientAddress: '取引先住所', items: '明細', taxRate: '税率', notes: '備考', status: '状態',
   name: '名称', acquisitionDate: '取得日', cost: '取得価額', usefulLifeYears: '耐用年数', disposalDate: '除却日', opening: '期首棚卸高', closing: '期末棚卸高',
-  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', payFund: '支払い方法', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', taxMethod: '消費税の課税方式', mainBusinessType: '主たる事業区分', taxReview: '税区分の見直し', taxCategory: '税区分', businessType: '事業区分', transactionDate: '取引年月日', receiptAssetId: 'レシート画像', attachments: '添付ファイル' };
+  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', payFund: '支払い方法', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', invoiceTaxRounding: '請求書の消費税の端数処理', taxRounding: '消費税の端数処理', taxMethod: '消費税の課税方式', mainBusinessType: '主たる事業区分', taxReview: '税区分の見直し', taxCategory: '税区分', businessType: '事業区分', transactionDate: '取引年月日', receiptAssetId: 'レシート画像', attachments: '添付ファイル' };
 function historySummary(e) {
   const d = e.after || e.before || {};
   if (e.target === 'transaction') return (d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.memo ? ' ' + d.memo : '');

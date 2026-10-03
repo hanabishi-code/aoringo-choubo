@@ -111,14 +111,25 @@ check('取り込み: 不正な課税方式・事業区分・案内の値は取�
 check('取り込み: 不正な税区分・事業区分は外す', [bad.transactions[0].taxCategory, bad.transactions[0].businessType], [undefined, undefined]);
 check('取り込み: 請求書の不正な税率は 10%、取引年月日は 40 文字まで', [bad.invoices[0].items[0].taxRate, bad.invoices[0].transactionDate.length], [10, 40]);
 check('取り込み: 中間納付は年(4桁)ごと・0 以上の数値', bad.taxInterim, { 2026: { national: 0, local: 0 } });
-check('SCHEMA_VERSION は 6', app.SCHEMA_VERSION, 6);
+check('SCHEMA_VERSION は 7', app.SCHEMA_VERSION, 7);
 
 /* 11. 請求書: 税率ごとの合計(端数処理は1請求書・1税率につき1回、四捨五入) */
 var t = app.invoiceTotals({ items: [{ name: 'A', qty: 3, unitPrice: 333, taxRate: 10 }, { name: 'B', qty: 1, unitPrice: 1, taxRate: 10 }, { name: '食品', qty: 1, unitPrice: 1234, taxRate: 8 }] });
 // 10%: 999 + 1 = 1,000 → 100 / 8%: 1,234 × 8% = 98.72 → 99
 check('請求書: 税率ごとの対価・消費税と合計', [t.byRate, t.subtotal, t.tax, t.total], [[{ rate: 10, subtotal: 1000, tax: 100 }, { rate: 8, subtotal: 1234, tax: 99 }], 2234, 199, 2433]);
 var t2 = app.invoiceTotals({ items: [{ qty: 1, unitPrice: 105, taxRate: 10 }, { qty: 1, unitPrice: 104, taxRate: 10 }] });
-check('請求書: 明細ごとではなく税率ごとに1回だけ丸める(105+104=209 → 20.9 → 21)', t2.tax, 21);
+check('請求書: 明細ごとではなく税率ごとに1回だけ丸める(以前の請求書=四捨五入: 105+104=209 → 20.9 → 21)', t2.tax, 21);
+// 端数処理の3方式(1税率につき1回): 10%対象 1,234 → 123.4 / 8%対象 1,234 → 98.72
+var items = [{ qty: 1, unitPrice: 1234, taxRate: 10 }, { qty: 1, unitPrice: 1234, taxRate: 8 }];
+check('請求書の端数処理: 切り捨て 123 / 98', app.invoiceTotals({ taxRounding: 'floor', items: items }).byRate.map(function (g) { return g.tax; }), [123, 98]);
+check('請求書の端数処理: 四捨五入 123 / 99', app.invoiceTotals({ taxRounding: 'round', items: items }).byRate.map(function (g) { return g.tax; }), [123, 99]);
+check('請求書の端数処理: 切り上げ 124 / 99', app.invoiceTotals({ taxRounding: 'ceil', items: items }).byRate.map(function (g) { return g.tax; }), [124, 99]);
+check('請求書の端数処理: ちょうど割り切れるときは3方式とも同じ(1,000 → 100)', ['floor', 'round', 'ceil'].map(function (m) { return app.invoiceTotals({ taxRounding: m, items: [{ qty: 1, unitPrice: 1000, taxRate: 10 }] }).tax; }), [100, 100, 100]);
+check('請求書の端数処理: 設定の初期値は切り捨て', app.defaultSettings().invoiceTaxRounding, 'floor');
+var mig = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 6, invoices: [{ id: 'inv_old', number: '1', items: [{ qty: 1, unitPrice: 209, taxRate: 10 }] }] });
+check('移行 v6→v7: 以前の請求書は四捨五入のまま(金額が変わらない: 20.9 → 21)', [mig.invoices[0].taxRounding, app.invoiceTotals(mig.invoices[0]).tax], ['round', 21]);
+var badr = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 7, settings: { invoiceTaxRounding: 'hack' }, invoices: [{ id: 'inv_b', number: '1', items: [], taxRounding: 'evil' }] });
+check('取り込み: 不正な端数処理は取り込まない/請求書は四捨五入扱い', [badr.settings.invoiceTaxRounding, badr.invoices[0].taxRounding], [undefined, 'round']);
 app.state.settings = Object.assign(app.defaultSettings(), { businessName: '屋号', invoiceRegNo: '' });
 check('請求書: 記載事項の不足(登録番号・宛先・取引年月日)', app.invoiceMissing({ clientName: '', transactionDate: '', items: [{ name: 'A' }] }), ['登録番号(設定)', '宛先', '取引年月日']);
 app.state.settings = Object.assign(app.defaultSettings(), { businessName: '屋号', invoiceRegNo: 'T1234567890123' });
