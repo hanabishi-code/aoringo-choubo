@@ -497,6 +497,14 @@ fn open_attachment(app: tauri::AppHandle, id: String) -> Result<(), String> {
         .and_then(|st| if st.success() { Ok(()) } else { Err("プレビューで開けませんでした".into()) })
 }
 
+/// 印刷(請求書など)。macOS の WKWebView では画面の window.print() で印刷ダイアログが開かないため、
+/// Tauri の Webview::print(WebKit の印刷)を使う。印刷用の領域と @media print の CSS がそのまま使われる。
+/// 印刷ダイアログの「PDF」から PDF として保存もできる
+#[tauri::command]
+fn print_page(webview: tauri::Webview) -> Result<(), String> {
+    webview.print().map_err(|e| e.to_string())
+}
+
 /// 表示用の一時コピーを消す(読み取り専用のファイルも消せる)
 fn clean_view_dir() {
     let vdir = std::env::temp_dir().join(VIEW_DIR_NAME);
@@ -531,6 +539,7 @@ pub fn run() {
             save_receipt,
             read_receipt,
             open_attachment,
+            print_page,
             selftest_report,
             read_history
         ])

@@ -1887,7 +1887,10 @@ function printInvoice(inv) {
       (s.bankInfo ? '<div style="margin-top:24px;"><strong>お振込先</strong><br>' + esc(s.bankInfo).replace(/\n/g, '<br>') + '</div>' : '') +
       (inv.notes ? '<div style="margin-top:16px;color:#555;">' + esc(inv.notes).replace(/\n/g, '<br>') + '</div>' : '') +
     '</div>';
-  setTimeout(function () { window.print(); }, 50);
+  // window.print() は Tauri(WKWebView)では印刷ダイアログが開かないため、Rust 側の印刷を呼ぶ
+  setTimeout(function () {
+    invoke('print_page').catch(function (e) { toast('印刷できませんでした(' + String(typeof e === 'string' ? e : (e && e.message) || '').slice(0, 80) + ')', 8000); });
+  }, 50);
 }
 
 /* ============================== CSV / バックアップ ============================== */
