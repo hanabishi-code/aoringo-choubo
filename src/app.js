@@ -301,6 +301,145 @@ function latestInventoryClosing(year) {
   return Number(inv[years[0]].closing) || 0;
 }
 
+/* ============================== 消費税 ============================== */
+// 出典: 国税庁「消費税及び地方消費税の申告書(簡易課税用)の書き方」(令和6年11月)
+//   https://www.nta.go.jp/publication/pamph/shohi/kaisei/yoshiki/pdf/202411_02.pdf
+//   付表4-3・付表5-3: 課税資産の譲渡等の対価の額 = 税込 × 100/110(軽減は 100/108)、1円未満切捨て
+//   課税標準額 = 税率ごとに千円未満切捨て / 消費税額 = 課税標準額 × 7.8%(軽減 6.24%)、1円未満切捨て
+//   控除対象仕入税額: 1種類 = 基礎となる消費税額 × みなし仕入率。2種類以上 = 原則計算・特例(1種類で75%以上・2種類で75%以上)
+//   (適用税率ごとに異なる計算方法は選べない)/ 差引税額・譲渡割額(× 22/78)は百円未満切捨て
+// みなし仕入率: 国税庁 No.6505 簡易課税制度 https://www.nta.go.jp/taxes/shiraberu/taxanswer/shohi/6505.htm
+// 2割特例・3割特例: 国税庁「2割特例の概要」https://www.nta.go.jp/publication/pamph/shohi/kaisei/202304/01.htm
+//   「インボイス制度に関する令和8年度税制改正について」(個人事業者: 令和8年分は2割特例、令和9・10年分は3割特例)
+//   https://www.nta.go.jp/taxes/shiraberu/zeimokubetsu/shohi/keigenzeiritsu/invoice-review/pdf/0026002-095.pdf
+// 税率の表(適用開始日つき)。法改正のときはここを更新する。国税分は標準 7.8%・軽減 6.24%
+const TAX_RATES = [{ from: '2019-10-01', standard: 10, reduced: 8 }];
+const NATIONAL_PART = { 10: 78, 8: 62.4 }; // 税率の内の国税分(%)× 10。10% → 7.8% / 8% → 6.24%
+const BUSINESS_TYPES = { 1: { label: '第1種(卸売業)', rate: 90 }, 2: { label: '第2種(小売業など)', rate: 80 }, 3: { label: '第3種(製造業・建設業など)', rate: 70 },
+  4: { label: '第4種(その他の事業)', rate: 60 }, 5: { label: '第5種(サービス業・運輸通信業など)', rate: 50 }, 6: { label: '第6種(不動産業)', rate: 40 } };
+const TAX_METHODS = { '': '未設定', exempt: '免税事業者(消費税の計算をしない)', simplified: '簡易課税', general: '本則課税', special20: '2割特例', special30: '3割特例' };
+const TAX_CATEGORIES = { standard: '課税(標準税率)', reduced: '課税(軽減税率)', exempt: '非課税', outside: '不課税・対象外', export: '免税(輸出など)' };
+function taxRateOn(date, category) {
+  const row = TAX_RATES.slice().reverse().find(function (r) { return date >= r.from; });
+  if (!row) return null;
+  return category === 'reduced' ? row.reduced : row.standard;
+}
+const bigFloorDiv = function (a, b) { return a / b; }; // BigInt の割り算は 0 方向への切り捨て(ここでは正の数だけを扱う)
+// 税込金額の合計から、税率ごとの各金額を国税庁の様式どおりに計算する
+function taxBaseFor(inclusive, rate) {
+  const incl = BigInt(Math.max(0, Math.floor(inclusive)));
+  const exclusive = bigFloorDiv(incl * 100n, BigInt(100 + rate));          // 課税資産の譲渡等の対価の額(1円未満切捨て)
+  const base = bigFloorDiv(exclusive, 1000n) * 1000n;                       // 課税標準額(千円未満切捨て)
+  const national = BigInt(NATIONAL_PART[rate] * 10);                          // 7.8% → 780 / 6.24% → 624(× 1/10000)
+  const tax = bigFloorDiv(base * national, 10000n);                           // 消費税額(1円未満切捨て)
+  const taxInSales = bigFloorDiv(incl * national, BigInt((100 + rate) * 100)); // 売上に含まれる消費税額(事業区分別。1円未満切捨て)
+  return { exclusive: exclusive, base: base, tax: tax, taxInSales: taxInSales };
+}
+// その年の消費税の集計。売上の金額は税込で記録している前提(年は1月〜12月の課税期間)
+function computeConsumptionTax(year) {
+  const s = state.settings || {};
+  const method = s.taxMethod || '';
+  const mainType = Number(s.mainBusinessType) || 0;
+  const out = { year: year, method: method, warnings: [] };
+  if (!method) { out.status = 'unset'; return out; }
+  if (method === 'exempt') { out.status = 'exempt'; return out; }
+  if (method === 'general') { out.status = 'general'; return out; }
+  if (method === 'simplified' && !BUSINESS_TYPES[mainType]) { out.status = 'unsetType'; return out; }
+  if (method === 'special20' && !(year >= 2023 && year <= 2026)) out.warnings.push('2割特例は、個人事業者は令和8年分(2026年分)までです。この年には使えない可能性があります');
+  if (method === 'special30' && !(year >= 2027 && year <= 2028)) out.warnings.push('3割特例は、個人事業者の令和9年分・令和10年分(2027・2028年分)だけです。この年には使えない可能性があります');
+  // 課税売上(税込)を、税率 × 事業区分ごとに集める
+  const sales = {}; // sales[rate][type] = 税込合計
+  let outOfTable = 0;
+  const add = function (rate, type, amt) { sales[rate] = sales[rate] || {}; sales[rate][type] = (sales[rate][type] || 0) + amt; };
+  state.transactions.forEach(function (t) {
+    if (t.kind !== 'income' || !t.date || t.date.slice(0, 4) !== String(year)) return;
+    const cat = t.taxCategory || 'standard';
+    if (cat !== 'standard' && cat !== 'reduced') return;
+    const rate = taxRateOn(t.date, cat); if (!rate) { outOfTable++; return; }
+    add(rate, Number(t.businessType) || mainType, Number(t.amount) || 0);
+  });
+  // 固定資産の売却代金は、所得税では事業主借だが、消費税では課税売上(第4種・標準税率)
+  (state.fixedAssets || []).forEach(function (a) {
+    if (!isSale(a) || !a.disposalDate || a.disposalDate.slice(0, 4) !== String(year) || !(Number(a.saleAmount) > 0)) return;
+    const rate = taxRateOn(a.disposalDate, 'standard'); if (!rate) { outOfTable++; return; }
+    add(rate, 4, Number(a.saleAmount));
+  });
+  if (outOfTable) out.warnings.push('税率の表より前の日付の売上 ' + outOfTable + ' 件は集計していません');
+  const rates = Object.keys(sales).map(Number).sort(function (a, b) { return b - a; });
+  out.rates = rates.map(function (rate) {
+    const inclusive = Object.keys(sales[rate]).reduce(function (x, k) { return x + sales[rate][k]; }, 0);
+    const b = taxBaseFor(inclusive, rate);
+    const byType = {};
+    Object.keys(sales[rate]).forEach(function (k) { byType[k] = taxBaseFor(sales[rate][k], rate); byType[k].inclusive = sales[rate][k]; });
+    return { rate: rate, inclusive: inclusive, exclusive: b.exclusive, base: b.base, tax: b.tax, byType: byType };
+  });
+  const sumBig = function (f) { return out.rates.reduce(function (x, r) { return x + f(r); }, 0n); };
+  const totalTax = sumBig(function (r) { return r.tax; });
+  // 控除対象仕入税額(税率ごとに計算し、すべての税率で同じ計算方法を使う)
+  let deduction = 0n; let how = '';
+  const pct = function (k, p) { return bigFloorDiv(k * BigInt(p), 100n); };
+  if (method === 'special20' || method === 'special30') {
+    const p = method === 'special20' ? 80 : 70;
+    out.rates.forEach(function (r) { r.deduction = pct(r.tax, p); });
+    how = TAX_METHODS[method] + '(売上の消費税額の ' + p + '% を控除)';
+  } else {
+    const types = Array.from(new Set([].concat.apply([], out.rates.map(function (r) { return Object.keys(r.byType).map(Number); })))).sort();
+    const salesOfType = {}; let salesAll = 0n;
+    types.forEach(function (t) { salesOfType[t] = out.rates.reduce(function (x, r) { return x + (r.byType[t] ? r.byType[t].exclusive : 0n); }, 0n); salesAll += salesOfType[t]; });
+    const candidates = [];
+    const apply = function (label, perRate) { const ds = out.rates.map(perRate); candidates.push({ label: label, ds: ds, total: ds.reduce(function (x, d) { return x + d; }, 0n) }); };
+    if (types.length <= 1) {
+      const m = types.length ? BUSINESS_TYPES[types[0]].rate : BUSINESS_TYPES[mainType].rate;
+      apply((types.length ? BUSINESS_TYPES[types[0]].label : '') + '(1種類の事業)', function (r) { return pct(r.tax, m); });
+    } else {
+      // 原則計算: 基礎となる消費税額 × Σ(事業区分別の消費税額 × みなし仕入率)÷ 事業区分別の消費税額の合計
+      apply('原則計算', function (r) {
+        let num = 0n, den = 0n;
+        Object.keys(r.byType).forEach(function (t) { num += r.byType[t].taxInSales * BigInt(BUSINESS_TYPES[t].rate); den += r.byType[t].taxInSales; });
+        return den === 0n ? 0n : bigFloorDiv(r.tax * num, den * 100n);
+      });
+      // 特例: 1種類の事業で75%以上
+      types.forEach(function (t) {
+        if (salesOfType[t] * 100n >= salesAll * 75n) apply('特例計算(' + BUSINESS_TYPES[t].label + 'で75%以上)', function (r) { return pct(r.tax, BUSINESS_TYPES[t].rate); });
+      });
+      // 特例: 2種類の事業で75%以上(高い方のみなし仕入率をその事業に、低い方を残りに)
+      for (let i = 0; i < types.length; i++) for (let j = i + 1; j < types.length; j++) {
+        const t1 = types[i], t2 = types[j];
+        if ((salesOfType[t1] + salesOfType[t2]) * 100n < salesAll * 75n) continue;
+        const hi = BUSINESS_TYPES[t1].rate >= BUSINESS_TYPES[t2].rate ? t1 : t2, lo = hi === t1 ? t2 : t1;
+        apply('特例計算(' + BUSINESS_TYPES[t1].label + 'と' + BUSINESS_TYPES[t2].label + 'で75%以上)', function (r) {
+          let den = 0n; Object.keys(r.byType).forEach(function (t) { den += r.byType[t].taxInSales; });
+          if (den === 0n) return 0n;
+          const eHi = r.byType[hi] ? r.byType[hi].taxInSales : 0n;
+          return bigFloorDiv(r.tax * (eHi * BigInt(BUSINESS_TYPES[hi].rate) + (den - eHi) * BigInt(BUSINESS_TYPES[lo].rate)), den * 100n);
+        });
+      }
+    }
+    // 有利な(控除額が最も大きい)計算方法を使う
+    candidates.sort(function (a, b) { return b.total > a.total ? 1 : (b.total < a.total ? -1 : 0); });
+    const best = candidates[0];
+    out.rates.forEach(function (r, i) { r.deduction = best ? best.ds[i] : 0n; });
+    how = best ? best.label : '';
+    out.candidates = candidates.map(function (c) { return { label: c.label, total: Number(c.total) }; });
+  }
+  deduction = sumBig(function (r) { return r.deduction; });
+  const net = totalTax > deduction ? bigFloorDiv(totalTax - deduction, 100n) * 100n : 0n;          // 差引税額(百円未満切捨て)
+  const local = bigFloorDiv(bigFloorDiv(net * 22n, 78n), 100n) * 100n;                                 // 譲渡割額(百円未満切捨て)
+  const interim = (state.taxInterim || {})[year] || {};
+  const toNum = function (b) { return Number(b); };
+  out.status = 'ok'; out.how = how;
+  out.rates = out.rates.map(function (r) {
+    const byType = {}; Object.keys(r.byType).forEach(function (t) { byType[t] = { inclusive: r.byType[t].inclusive, exclusive: toNum(r.byType[t].exclusive), taxInSales: toNum(r.byType[t].taxInSales) }; });
+    return { rate: r.rate, inclusive: r.inclusive, exclusive: toNum(r.exclusive), base: toNum(r.base), tax: toNum(r.tax), deduction: toNum(r.deduction), byType: byType };
+  });
+  out.base = out.rates.reduce(function (x, r) { return x + r.base; }, 0);
+  out.tax = toNum(totalTax); out.deduction = toNum(deduction); out.net = toNum(net); out.local = toNum(local);
+  out.interimNational = Number(interim.national) || 0; out.interimLocal = Number(interim.local) || 0;
+  out.payNational = out.net - out.interimNational; out.payLocal = out.local - out.interimLocal;
+  out.payTotal = out.payNational + out.payLocal;
+  return out;
+}
+
 /* ============================== 損益計算書 / 貸借対照表 ============================== */
 function computePL(year) {
   const incomeTotals = {}; ACCOUNTS.income.forEach(function (a) { incomeTotals[a.key] = 0; });
