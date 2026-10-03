@@ -191,4 +191,4 @@ osascript -l JavaScript tests/check_accounts.js      # 口座(移行・口座ご
 
 ## ライセンス
 
-MIT License(LICENSE ファイルは準備中)
+[MIT License](LICENSE)(Copyright (c) 2026 hanabishi-code)

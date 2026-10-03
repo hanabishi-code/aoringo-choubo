@@ -3,6 +3,7 @@ name = "keiri-note"
 version = "0.1.0"
 description = "個人事業主向け複式簿記アプリ(オフライン)"
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "keiri_note_lib"
