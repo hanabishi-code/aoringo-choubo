@@ -5,7 +5,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, sanitizeBackup: sanitizeBackup, partnerSummary: partnerSummary, txMatches: txMatches, emptySearch: emptySearch, Store: Store, findPartnerByName: findPartnerByName, SCHEMA_VERSION: SCHEMA_VERSION, invoiceMatches: invoiceMatches };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, sanitizeBackup: sanitizeBackup, partnerSummary: partnerSummary, txMatches: txMatches, emptySearch: emptySearch, Store: Store, findPartnerByName: findPartnerByName, SCHEMA_VERSION: SCHEMA_VERSION, invoiceMatches: invoiceMatches, partnerPickerHtml: partnerPickerHtml };'))(document, window, localStorage);
 var results = [];
 function check(name, actual, expected) {
   var ok = JSON.stringify(actual) === JSON.stringify(expected);
@@ -71,5 +71,17 @@ check('請求書の検索: 発行日の範囲', findInv({ dateFrom: '2026-10-01'
 check('請求書の検索: 合計(税込)の範囲 / 合計の金額そのもの', [findInv({ amountMin: '60000', amountMax: '70000' }), findInv({ text: '110,000' })], [['i2'], ['i1']]);
 check('請求書の検索: 文字(明細・取引年月日・備考・番号)', [findInv({ text: '保守' }), findInv({ text: '10月分' }), findInv({ text: '振込済' }), findInv({ text: '003' })], [['i1'], ['i2'], ['i2'], ['i3']]);
 check('請求書の検索: 組み合わせ(取引先 × 状態 × 文字)', findInv({ partnerId: 'pt_a', status: '入金済み', text: 'デザイン' }), ['i2']);
+
+/* 7. 宛先のプルダウン(▼) */
+s.partners = [{ id: 'pt_b', name: 'いろは商店' }, { id: 'pt_a', name: 'あおば工房' }];
+var h1 = app.partnerPickerHtml('inv-client', 'pt_b', 'いろは商店');
+check('プルダウン: 名前順(あおば → いろは)、最後に「新しい取引先を入力」', h1.match(/<option[^>]*>[^<]*/g).map(function (o) { return o.replace(/<option[^>]*>/, ''); }), ['あおば工房', 'いろは商店', '+ 新しい取引先を入力']);
+check('プルダウン: 既存の請求書は紐づいた取引先が選ばれ、名前の入力欄は隠れる', [/value="pt_b" selected/.test(h1), /id="inv-client-new"[^>]* hidden/.test(h1)], [true, true]);
+var h2 = app.partnerPickerHtml('inv-client', undefined, '未登録の会社');
+check('プルダウン: 取引先とつながっていない宛先は「新しい取引先を入力」で名前を表示', [/value="__new" selected/.test(h2), /value="未登録の会社"/.test(h2), /id="inv-client-new"[^>]* hidden/.test(h2)], [true, true, false]);
+check('プルダウン: 取引先が 10 件未満なら絞り込み欄なし', /picker-filter/.test(h1), false);
+s.partners = []; for (var k = 0; k < 10; k++) s.partners.push({ id: 'pt_' + k, name: '取引先' + k });
+check('プルダウン: 10 件以上で絞り込み欄を出す', /picker-filter/.test(app.partnerPickerHtml('inv-client', 'pt_1', '')), true);
+check('プルダウン: 名前は HTML として解釈されない', /<img/.test((s.partners = [{ id: 'pt_x', name: '<img src=x onerror=alert(1)>' }], app.partnerPickerHtml('inv-client', 'pt_x', ''))), false);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';

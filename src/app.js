@@ -595,6 +595,36 @@ async function partnerIdForName(name, address) {
   const doc = await Store.addPartner({ name: n, address: address ? String(address).slice(0, 200) : undefined });
   return doc.id;
 }
+// 取引先を選ぶプルダウン(▼)。取引先の一覧(名前順)+「新しい取引先を入力」。新しく入力するときだけ名前の入力欄を出す。
+// 取引先が 10 件以上あるときは、プルダウンの上に絞り込みの入力欄を出す
+const NEW_PARTNER = '__new';
+function partnerPickerHtml(prefix, currentId, currentName) {
+  const list = (state.partners || []).slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'ja'); });
+  const sel = currentId && findById(list, currentId) ? currentId : NEW_PARTNER;
+  const showNew = sel === NEW_PARTNER;
+  return '<div class="partner-picker" data-picker="' + prefix + '">' +
+    (list.length >= 10 ? '<input type="search" class="picker-filter" placeholder="取引先を絞り込む" style="margin-bottom:6px;">' : '') +
+    '<select id="' + prefix + '-sel">' + list.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') +
+      '<option value="' + NEW_PARTNER + '"' + (showNew ? ' selected' : '') + '>' + (list.length ? '+ 新しい取引先を入力' : '新しい取引先を入力') + '</option></select>' +
+    '<input type="text" id="' + prefix + '-new" maxlength="100" value="' + esc(showNew ? (currentName || '') : '') + '" placeholder="新しい取引先の名前" style="margin-top:6px;"' + (showNew ? '' : ' hidden') + '>' +
+  '</div>';
+}
+// 選んだ取引先の名前(新しく入力した場合はその名前)を返す
+function pickerName(prefix) {
+  const sel = document.getElementById(prefix + '-sel'); if (!sel) return '';
+  if (sel.value === NEW_PARTNER) return (document.getElementById(prefix + '-new') || {}).value || '';
+  return partnerName(sel.value);
+}
+function bindPartnerPicker(prefix, onPick) {
+  const box = document.querySelector('[data-picker="' + prefix + '"]'); if (!box) return;
+  const sel = document.getElementById(prefix + '-sel'), input = document.getElementById(prefix + '-new'), filter = box.querySelector('.picker-filter');
+  sel.addEventListener('change', function () { input.hidden = sel.value !== NEW_PARTNER; if (sel.value === NEW_PARTNER) input.focus(); if (onPick) onPick(sel.value === NEW_PARTNER ? null : findById(state.partners, sel.value)); });
+  if (input && onPick) input.addEventListener('input', function () { onPick(null); });
+  if (filter) filter.addEventListener('input', function () {
+    const w = normalizeSearch(filter.value);
+    Array.from(sel.options).forEach(function (o) { o.hidden = o.value !== NEW_PARTNER && w && normalizeSearch(o.textContent).indexOf(w) < 0; });
+  });
+}
 function partnerDatalistHtml() { return '<datalist id="partner-list">' + (state.partners || []).map(function (p) { return '<option value="' + esc(p.name) + '">'; }).join('') + '</datalist>'; }
 
 const Store = {
@@ -1377,7 +1407,7 @@ function viewInvoiceForm() {
     '<section class="block"><h2>' + (editingInvoiceId ? '請求書を編集' : '新しい請求書') + '</h2>' +
       '<div class="field-row"><div class="field"><label>請求書番号</label><input type="text" id="inv-number" value="' + esc(d.number) + '"></div>' +
       '<div class="field"><label>発行日</label><input type="date" id="inv-issue" value="' + esc(d.issueDate) + '"></div></div>' +
-      '<div class="field"><label>宛先(会社名・氏名)</label><input type="text" id="inv-client" list="partner-list" maxlength="100" value="' + esc(d.clientName) + '" placeholder="取引先から選ぶか、新しく入力">' + partnerDatalistHtml() + '</div>' +
+      '<div class="field"><label>宛先(取引先)</label>' + partnerPickerHtml('inv-client', d.partnerId, d.clientName) + '</div>' +
       '<div class="field"><label>状態</label><select id="inv-status">' + INVOICE_STATUSES.map(function (st) { return '<option' + ((d.status || '下書き') === st ? ' selected' : '') + '>' + st + '</option>'; }).join('') + '</select></div>' +
       '<div class="field"><label>宛先住所(任意)</label><input type="text" id="inv-client-addr" value="' + esc(d.clientAddress) + '"></div>' +
       '<div class="field-row"><div class="field"><label>取引年月日(または期間)</label><input type="text" id="inv-txdate" maxlength="40" value="' + esc(d.transactionDate || '') + '" placeholder="例: 2026年9月30日 / 2026年9月分"></div>' +
@@ -1681,20 +1711,21 @@ function bindViewEvents() {
   if (document.getElementById('inv-items')) renderInvoiceItems();
   const addItem = document.getElementById('inv-add-item'); if (addItem) addItem.addEventListener('click', function () { invoiceDraft.items.push({ name: '', qty: 1, unitPrice: 0, taxRate: 10 }); renderInvoiceItems(); updateInvoiceTotalsDisplay(); });
 
-  [['inv-number', 'number'], ['inv-issue', 'issueDate'], ['inv-client', 'clientName'], ['inv-client-addr', 'clientAddress'], ['inv-due', 'dueDate'], ['inv-txdate', 'transactionDate'], ['inv-status', 'status'], ['inv-notes', 'notes']].forEach(function (pair) {
+  [['inv-number', 'number'], ['inv-issue', 'issueDate'], ['inv-client-addr', 'clientAddress'], ['inv-due', 'dueDate'], ['inv-txdate', 'transactionDate'], ['inv-status', 'status'], ['inv-notes', 'notes']].forEach(function (pair) {
     const el = document.getElementById(pair[0]); if (!el) return; el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', function () { invoiceDraft[pair[1]] = el.value; });
   });
-  // 宛先に登録済みの取引先を選んだら、住所が空なら取引先の住所を入れる
-  const invClient = document.getElementById('inv-client');
-  if (invClient) invClient.addEventListener('change', function () {
-    const p = findPartnerByName(invClient.value); const addr = document.getElementById('inv-client-addr');
-    if (p) { invoiceDraft.clientName = p.name; invClient.value = p.name; if (p.address && addr && !addr.value) { addr.value = p.address; invoiceDraft.clientAddress = p.address; } }
+  // 宛先: 取引先を選んだら宛先名と、住所が空なら取引先の住所を入れる。新しく入力するときは入力した名前を宛先にする
+  if (invoiceDraft) bindPartnerPicker('inv-client', function (p) {
+    const addr = document.getElementById('inv-client-addr');
+    if (p) { invoiceDraft.clientName = p.name; invoiceDraft.partnerId = p.id; if (p.address && addr && !addr.value) { addr.value = p.address; invoiceDraft.clientAddress = p.address; } }
+    else { invoiceDraft.clientName = (document.getElementById('inv-client-new') || {}).value || ''; delete invoiceDraft.partnerId; }
   });
   const invSave = document.getElementById('inv-save');
   if (invSave) invSave.addEventListener('click', async function () {
     delete invoiceDraft.taxRate; // 税率は明細ごと(以前の形式の項目は使わない)
     invoiceDraft.items.forEach(function (it) { it.taxRate = itemRate(invoiceDraft, it); });
-    // 宛先の名前で取引先とつなぐ(なければ作る)
+    // 宛先: 選んだ取引先、または新しく入力した名前で取引先とつなぐ(なければ作る)
+    invoiceDraft.clientName = normName(pickerName('inv-client'));
     const pid = await partnerIdForName(invoiceDraft.clientName, invoiceDraft.clientAddress);
     if (pid) invoiceDraft.partnerId = pid; else delete invoiceDraft.partnerId;
     const missing = invoiceMissing(invoiceDraft);
