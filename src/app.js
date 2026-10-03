@@ -580,7 +580,7 @@ function renderShell() {
   renderView();
 }
 function hankoSvg() {
-  return '<svg class="hanko" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><circle cx="20" cy="20" r="18" fill="none" stroke="var(--vermillion)" stroke-width="2.5"/><text x="20" y="26" text-anchor="middle" font-size="16" font-family="var(--font-display)" fill="var(--vermillion)">帳</text></svg>';
+  return '<svg class="hanko" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><circle cx="20" cy="20" r="18" fill="none" stroke="var(--brand-gold)" stroke-width="2.5"/><text x="20" y="26" text-anchor="middle" font-size="16" font-family="var(--font-display)" fill="var(--brand-gold)">帳</text></svg>';
 }
 function renderView() {
   const view = document.getElementById('view');
