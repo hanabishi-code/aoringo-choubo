@@ -43,6 +43,8 @@ let editingAssetId = null;
 /* ============================== ユーティリティ ============================== */
 function uid(prefix) { return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8); }
 function todayStr() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+// 金額の表示。マイナスは赤(.neg)にする(記号「−」も付くので色だけに頼らない)
+function money(n) { n = Number(n) || 0; return n < 0 ? '<span class="neg">' + yen(n) + '</span>' : yen(n); }
 function yen(n) { n = Number(n) || 0; const sign = n < 0 ? '−' : ''; return sign + '¥' + Math.abs(Math.round(n)).toLocaleString('ja-JP'); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 function accountLabel(type, key) { const list = ACCOUNTS[type] || []; const f = list.find(function (a) { return a.key === key; }); return f ? f.label : (key || ''); }
@@ -966,25 +968,25 @@ function viewPL() {
     '<section class="block"><h2>損益計算書</h2>' + (assetsWithInvalidLife().length ? '<div class="note" style="color:var(--danger);">範囲外の耐用年数を含むため、減価償却費は暫定値です。</div>' : '') +
       '<div style="margin-bottom:14px;"><select class="year-select" id="pl-year">' + yearOptions + '</select></div>' +
       '<div class="kpi-row">' +
-        '<div class="kpi"><div class="lbl">収入合計</div><div class="val num">' + yen(pl.incomeSum) + '</div></div>' +
-        '<div class="kpi"><div class="lbl">売上総利益</div><div class="val num">' + yen(pl.grossProfit) + '</div></div>' +
-        '<div class="kpi"><div class="lbl accent">差引金額(所得)</div><div class="val num accent">' + yen(pl.net) + '</div></div>' +
+        '<div class="kpi"><div class="lbl">収入合計</div><div class="val num">' + money(pl.incomeSum) + '</div></div>' +
+        '<div class="kpi"><div class="lbl">売上総利益</div><div class="val num">' + money(pl.grossProfit) + '</div></div>' +
+        '<div class="kpi"><div class="lbl accent">差引金額(所得)</div><div class="val num accent">' + money(pl.net) + '</div></div>' +
       '</div>' +
       '<div class="table-scroll"><table class="ledger"><tr><th>収入の部</th><th class="num">金額</th></tr>' +
-        ACCOUNTS.income.map(function (a) { return '<tr><td>' + a.label + '</td><td class="num">' + yen(pl.incomeTotals[a.key]) + '</td></tr>'; }).join('') +
-        '<tr><td><strong>収入合計</strong></td><td class="num"><strong>' + yen(pl.incomeSum) + '</strong></td></tr>' +
+        ACCOUNTS.income.map(function (a) { return '<tr><td>' + a.label + '</td><td class="num">' + money(pl.incomeTotals[a.key]) + '</td></tr>'; }).join('') +
+        '<tr><td><strong>収入合計</strong></td><td class="num"><strong>' + money(pl.incomeSum) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="table-scroll" style="margin-top:16px;"><table class="ledger"><tr><th>売上原価</th><th class="num">金額</th></tr>' +
-        '<tr><td>期首棚卸高</td><td class="num">' + yen(pl.inventoryOpening) + '</td></tr>' +
-        '<tr><td>仕入高</td><td class="num">' + yen(pl.purchases) + '</td></tr>' +
-        '<tr><td>期末棚卸高</td><td class="num">' + yen(pl.inventoryClosing) + '</td></tr>' +
-        '<tr><td><strong>売上原価</strong></td><td class="num"><strong>' + yen(pl.cogs) + '</strong></td></tr>' +
-        '<tr><td><strong>差引金額(売上総利益)</strong></td><td class="num"><strong>' + yen(pl.grossProfit) + '</strong></td></tr>' +
+        '<tr><td>期首棚卸高</td><td class="num">' + money(pl.inventoryOpening) + '</td></tr>' +
+        '<tr><td>仕入高</td><td class="num">' + money(pl.purchases) + '</td></tr>' +
+        '<tr><td>期末棚卸高</td><td class="num">' + money(pl.inventoryClosing) + '</td></tr>' +
+        '<tr><td><strong>売上原価</strong></td><td class="num"><strong>' + money(pl.cogs) + '</strong></td></tr>' +
+        '<tr><td><strong>差引金額(売上総利益)</strong></td><td class="num"><strong>' + money(pl.grossProfit) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="table-scroll" style="margin-top:16px;"><table class="ledger"><tr><th>経費の部</th><th class="num">金額</th></tr>' +
-        ACCOUNTS.expense.map(function (a) { return '<tr><td>' + a.label + (a.auto ? ' <span class="tag">自動計算</span>' : '') + '</td><td class="num">' + yen(pl.expenseTotals[a.key]) + '</td></tr>'; }).join('') +
-        '<tr><td><strong>経費合計</strong></td><td class="num"><strong>' + yen(pl.expenseSum) + '</strong></td></tr>' +
-        '<tr><td class="accent"><strong>差引金額(所得金額)</strong></td><td class="num accent"><strong>' + yen(pl.net) + '</strong></td></tr>' +
+        ACCOUNTS.expense.map(function (a) { return '<tr><td>' + a.label + (a.auto ? ' <span class="tag">自動計算</span>' : '') + '</td><td class="num">' + money(pl.expenseTotals[a.key]) + '</td></tr>'; }).join('') +
+        '<tr><td><strong>経費合計</strong></td><td class="num"><strong>' + money(pl.expenseSum) + '</strong></td></tr>' +
+        '<tr><td class="accent"><strong>差引金額(所得金額)</strong></td><td class="num accent"><strong>' + money(pl.net) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="note">この所得金額は青色申告特別控除(最大65万円)を適用する前の金額です。控除は確定申告書の作成時に適用してください。仕入・棚卸資産・固定資産の減価償却は自動計算されますが、実際の申告前に内容をご確認ください。</div>' +
       '<button class="btn secondary" id="pl-export" style="margin-top:10px;">この年をCSVで書き出す(確定申告用)</button>' +
@@ -1000,24 +1002,24 @@ function viewBS() {
     '<section class="block"><h2>貸借対照表(簡易)</h2>' + assetPaymentNotice() + (assetsWithInvalidLife().length ? '<div class="note" style="color:var(--danger);">範囲外の耐用年数を含むため、固定資産の帳簿価額は暫定値です。</div>' : '') +
       '<div class="field" style="max-width:220px;"><label>基準日</label><input type="date" id="bs-date" value="' + esc(asOf) + '"></div>' +
       '<div class="table-scroll"><table class="ledger"><tr><th>資産の部</th><th class="num">金額</th></tr>' +
-        '<tr><td>現金</td><td class="num">' + yen(bs.cash) + '</td></tr>' +
-        '<tr><td>普通預金</td><td class="num">' + yen(bs.bank) + '</td></tr>' +
-        '<tr><td>棚卸資産</td><td class="num">' + yen(bs.inventoryVal) + '</td></tr>' +
-        '<tr><td>固定資産(帳簿価額)</td><td class="num">' + yen(bs.fixedAssetsVal) + '</td></tr>' +
-        '<tr><td><strong>資産合計</strong></td><td class="num"><strong>' + yen(bs.assetsTotal) + '</strong></td></tr>' +
+        '<tr><td>現金</td><td class="num">' + money(bs.cash) + '</td></tr>' +
+        '<tr><td>普通預金</td><td class="num">' + money(bs.bank) + '</td></tr>' +
+        '<tr><td>棚卸資産</td><td class="num">' + money(bs.inventoryVal) + '</td></tr>' +
+        '<tr><td>固定資産(帳簿価額)</td><td class="num">' + money(bs.fixedAssetsVal) + '</td></tr>' +
+        '<tr><td><strong>資産合計</strong></td><td class="num"><strong>' + money(bs.assetsTotal) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="table-scroll" style="margin-top:16px;"><table class="ledger"><tr><th>負債の部</th><th class="num">金額</th></tr>' +
-        '<tr><td>買掛金</td><td class="num">' + yen(bs.payable) + '</td></tr>' +
-        '<tr><td>未払金</td><td class="num">' + yen(bs.accrued) + '</td></tr>' +
-        '<tr><td>借入金</td><td class="num">' + yen(bs.loan) + '</td></tr>' +
-        '<tr><td><strong>負債合計</strong></td><td class="num"><strong>' + yen(bs.liabilitiesTotal) + '</strong></td></tr>' +
+        '<tr><td>買掛金</td><td class="num">' + money(bs.payable) + '</td></tr>' +
+        '<tr><td>未払金</td><td class="num">' + money(bs.accrued) + '</td></tr>' +
+        '<tr><td>借入金</td><td class="num">' + money(bs.loan) + '</td></tr>' +
+        '<tr><td><strong>負債合計</strong></td><td class="num"><strong>' + money(bs.liabilitiesTotal) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="table-scroll" style="margin-top:16px;"><table class="ledger"><tr><th>資本の部</th><th class="num">金額</th></tr>' +
-        '<tr><td>元入金(開始時点)</td><td class="num">' + yen(bs.openingCapital) + '</td></tr>' +
-        '<tr><td>事業主借(累計)</td><td class="num">' + yen(bs.contribution) + '</td></tr>' +
-        '<tr><td>事業主貸(累計)</td><td class="num">' + yen(-bs.drawing) + '</td></tr>' +
-        '<tr><td>所得金額(累計・逆算)</td><td class="num">' + yen(bs.retainedEarnings) + '</td></tr>' +
-        '<tr><td class="accent"><strong>資本合計</strong></td><td class="num accent"><strong>' + yen(bs.equityTotalVal) + '</strong></td></tr>' +
+        '<tr><td>元入金(開始時点)</td><td class="num">' + money(bs.openingCapital) + '</td></tr>' +
+        '<tr><td>事業主借(累計)</td><td class="num">' + money(bs.contribution) + '</td></tr>' +
+        '<tr><td>事業主貸(累計)</td><td class="num">' + money(-bs.drawing) + '</td></tr>' +
+        '<tr><td>所得金額(累計・逆算)</td><td class="num">' + money(bs.retainedEarnings) + '</td></tr>' +
+        '<tr><td class="accent"><strong>資本合計</strong></td><td class="num accent"><strong>' + money(bs.equityTotalVal) + '</strong></td></tr>' +
       '</table></div>' +
       '<div class="note">資産合計と「負債合計+資本合計」は常に一致するように計算しています。棚卸資産は直近に登録した年度末の金額を表示しています(日々の在庫変動は反映されません)。実際の申告前には内容を必ずご確認ください。</div>' +
     '</section>'
@@ -1065,7 +1067,7 @@ function viewInvoiceForm() {
       '<div class="field"><label>備考</label><textarea id="inv-notes">' + esc(d.notes) + '</textarea></div>' +
       '<div class="kpi-row"><div class="kpi"><div class="lbl">小計</div><div class="val num" id="inv-subtotal">' + yen(t.subtotal) + '</div></div>' +
       '<div class="kpi"><div class="lbl">消費税</div><div class="val num" id="inv-taxval">' + yen(t.tax) + '</div></div>' +
-      '<div class="kpi"><div class="lbl accent">合計</div><div class="val num accent" id="inv-total">' + yen(t.total) + '</div></div></div>' +
+      '<div class="kpi"><div class="lbl accent">合計</div><div class="val num accent" id="inv-total">' + money(t.total) + '</div></div></div>' +
       '<div style="display:flex; gap:10px;"><button class="btn block" id="inv-save">保存する</button><button class="btn secondary" id="inv-cancel">キャンセル</button></div>' +
     '</section>'
   );

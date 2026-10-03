@@ -12,6 +12,7 @@
     --brand-gold: #8A640B;
     --brand-green: #1E8E3E;
     --brand-green-soft: rgba(30,142,62,0.12);
+    --brand-green-text: #18793A; /* 文字に使う緑(背景 #F1EEE2 に対し 4.71:1。線用の --brand-green は 3.62:1 で文字には不足) */
     --danger: #A23B2E;
     --font-display: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
     --font-body: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
@@ -24,14 +25,14 @@
       --paper: #171814; --paper-2: #212219; --paper-line: #3A3A2D;
       --ink: #ECE8D8; --ink-muted: #A6A28C; --indigo: #8DA9D1; --indigo-deep: #B9CBE6;
       --vermillion: #E17A63; --vermillion-soft: rgba(225,122,99,0.15); --danger: #E17A63;
-      --brand-gold: #E0B23A; --brand-green: #4CC66A; --brand-green-soft: rgba(76,198,106,0.16);
+      --brand-gold: #E0B23A; --brand-green: #4CC66A; --brand-green-soft: rgba(76,198,106,0.16); --brand-green-text: #4CC66A;
     }
   }
   :root[data-theme="dark"] {
     --paper: #171814; --paper-2: #212219; --paper-line: #3A3A2D;
     --ink: #ECE8D8; --ink-muted: #A6A28C; --indigo: #8DA9D1; --indigo-deep: #B9CBE6;
     --vermillion: #E17A63; --vermillion-soft: rgba(225,122,99,0.15); --danger: #E17A63;
-      --brand-gold: #E0B23A; --brand-green: #4CC66A; --brand-green-soft: rgba(76,198,106,0.16);
+      --brand-gold: #E0B23A; --brand-green: #4CC66A; --brand-green-soft: rgba(76,198,106,0.16); --brand-green-text: #4CC66A;
   }
   html { scroll-padding-top: env(safe-area-inset-top, 0px); height: 100%; }
   * { box-sizing: inherit; }
@@ -41,7 +42,8 @@
   a { color: var(--indigo); }
   .num { font-variant-numeric: tabular-nums; }
   .muted { color: var(--ink-muted); }
-  .accent { color: var(--vermillion); }
+  .accent { color: var(--brand-green-text); } /* 重要な合計の強調 */
+  .neg, .accent .neg { color: var(--danger); } /* マイナスの金額だけ赤 */
 
   header.app-header { position: sticky; top: 0; z-index: 20; padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 0 16px; background: var(--paper); border-bottom: 1px solid var(--paper-line); }
   .header-row { display: flex; align-items: center; gap: 10px; }
