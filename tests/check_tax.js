@@ -111,7 +111,7 @@ check('取り込み: 不正な課税方式・事業区分・案内の値は取�
 check('取り込み: 不正な税区分・事業区分は外す', [bad.transactions[0].taxCategory, bad.transactions[0].businessType], [undefined, undefined]);
 check('取り込み: 請求書の不正な税率は 10%、取引年月日は 40 文字まで', [bad.invoices[0].items[0].taxRate, bad.invoices[0].transactionDate.length], [10, 40]);
 check('取り込み: 中間納付は年(4桁)ごと・0 以上の数値', bad.taxInterim, { 2026: { national: 0, local: 0 } });
-check('SCHEMA_VERSION は 7', app.SCHEMA_VERSION, 7);
+check('SCHEMA_VERSION は 7 以上(最新の版数は tests/check_partners.js)', app.SCHEMA_VERSION >= 7, true);
 
 /* 11. 請求書: 税率ごとの合計(端数処理は1請求書・1税率につき1回、四捨五入) */
 var t = app.invoiceTotals({ items: [{ name: 'A', qty: 3, unitPrice: 333, taxRate: 10 }, { name: 'B', qty: 1, unitPrice: 1, taxRate: 10 }, { name: '食品', qty: 1, unitPrice: 1234, taxRate: 8 }] });
