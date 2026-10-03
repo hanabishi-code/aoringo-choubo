@@ -132,6 +132,7 @@ osascript -l JavaScript tests/check_search.js        # 検索(文字・日付・
 osascript -l JavaScript tests/check_attach.js        # 添付ファイル(形式の判定・移行・取り込みの検証)
 osascript -l JavaScript tests/check_tax.js           # 消費税の集計・請求書の税率ごとの合計・移行
 osascript -l JavaScript tests/check_partners.js      # 取引先(移行・取り込みの検証・集計・検索・統合)
+osascript -l JavaScript tests/check_history_labels.js # 変更履歴の表示(全項目の表示名・選択肢の変換・内部名が出ないこと)
 ```
 
 ## 消費税の集計

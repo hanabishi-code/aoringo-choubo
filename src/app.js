@@ -2048,41 +2048,119 @@ function onImportBackup(e) {
 /* ============================== 変更履歴の表示 ============================== */
 const HISTORY_ACTIONS = { add: '追加', update: '修正', delete: '削除', merge: '統合', import: '取り込み', restore: '復元', wipe: '全削除' };
 const HISTORY_TARGETS = { transaction: '取引', invoice: '請求書', fixedAsset: '固定資産', inventory: '棚卸高', taxInterim: '中間納付', partner: '取引先', settings: '設定', all: '全データ' };
-const HISTORY_FIELD_LABELS = { kind: '種類', date: '日付', amount: '金額', memo: 'メモ', fund: '入出金', account: '勘定科目', liability: '負債科目', accountType: '科目区分',
-  number: '請求書番号', issueDate: '発行日', dueDate: '支払期限', clientName: '取引先', clientAddress: '取引先住所', items: '明細', taxRate: '税率', notes: '備考', status: '状態',
-  name: '名称', acquisitionDate: '取得日', cost: '取得価額', usefulLifeYears: '耐用年数', disposalDate: '除却日', opening: '期首棚卸高', closing: '期末棚卸高',
-  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', payFund: '支払い方法', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', invoiceTaxRounding: '請求書の消費税の端数処理', taxRounding: '消費税の端数処理', taxMethod: '消費税の課税方式', mainBusinessType: '主たる事業区分', taxReview: '税区分の見直し', taxCategory: '税区分', businessType: '事業区分', transactionDate: '取引年月日', partnerId: '取引先', status: '状態', receiptAssetId: 'レシート画像', attachments: '添付ファイル' };
+// 変更履歴の項目: [キー, 表示名, 値の表示のしかた]。並びは画面の入力欄の順(修正の差分もこの順で並べる)。
+// データの項目を増やしたら、ここにも追加する(tests/check_history_labels.js が漏れを検出する)
+const HISTORY_FIELDS = [
+  // 取引
+  ['kind', '区分', 'kind'], ['date', '日付', 'date'], ['amount', '金額', 'yen'], ['account', '勘定科目', 'account'], ['accountType', '科目の区分', 'accountType'],
+  ['fund', '資金', 'fund'], ['liability', '負債の科目', 'liability'], ['partnerId', '取引先', 'partner'], ['memo', 'メモ', 'text'],
+  ['taxCategory', '消費税の税区分', 'taxCategory'], ['businessType', '事業区分', 'businessType'], ['attachments', '添付ファイル', 'attachments'],
+  ['receiptAssetId', 'レシート画像', 'receipt'], ['linkedAssetId', '連動する固定資産', 'linkedAsset'],
+  // 請求書
+  ['number', '請求書番号', 'text'], ['issueDate', '発行日', 'date'], ['transactionDate', '取引年月日', 'text'], ['dueDate', '支払期限', 'date'],
+  ['clientName', '宛先', 'text'], ['clientAddress', '宛先住所', 'text'], ['status', '状態', 'text'], ['items', '明細', 'items'],
+  ['taxRate', '税率', 'rate'], ['taxRounding', '消費税の端数処理', 'rounding'], ['notes', '備考', 'text'],
+  // 固定資産
+  ['name', '名称', 'text'], ['acquisitionDate', '取得日', 'date'], ['cost', '取得価額', 'yen'], ['payFund', '支払い方法', 'payFund'],
+  ['usefulLifeYears', '耐用年数', 'years'], ['disposalDate', '除却・売却日', 'date'], ['disposalType', '処分の種類', 'disposalType'],
+  ['saleAmount', '売却代金', 'yen'], ['saleFund', '受け取り先', 'fund'],
+  // 棚卸高・中間納付・取引先
+  ['opening', '期首棚卸高', 'yen'], ['closing', '期末棚卸高', 'yen'], ['national', '中間納付(国税)', 'yen'], ['local', '中間納付(地方)', 'yen'], ['address', '住所', 'text'],
+  // 設定
+  ['businessName', '屋号', 'text'], ['ownerName', '氏名', 'text'], ['phone', '電話番号', 'text'], ['invoiceRegNo', '登録番号', 'text'], ['bankInfo', '振込先', 'text'],
+  ['openingDate', '開始日', 'date'], ['openingCash', '開始時の現金', 'yen'], ['openingBank', '開始時の預金', 'yen'], ['invoiceSeq', '請求書の連番', 'int'],
+  ['theme', '表示テーマ', 'theme'], ['taxMethod', '消費税の課税方式', 'taxMethod'], ['mainBusinessType', '主たる事業区分', 'businessType'],
+  ['invoiceTaxRounding', '請求書の消費税の端数処理', 'rounding'], ['depreciationRounding', '減価償却の端数処理', 'rounding'], ['taxReview', '税区分の見直し', 'taxReview'],
+  // 表示しない項目(内部の ID・記録日時)
+  ['id', '', 'hidden'], ['createdAt', '', 'hidden'], ['addedAt', '', 'hidden']
+];
+const HISTORY_FIELD_INDEX = {}; HISTORY_FIELDS.forEach(function (f, i) { HISTORY_FIELD_INDEX[f[0]] = i; });
+const HISTORY_FIELD_LABELS = {}; HISTORY_FIELDS.forEach(function (f) { HISTORY_FIELD_LABELS[f[0]] = f[1]; });
+const THEME_LABELS = { auto: '自動', light: 'ライト', dark: 'ダーク' };
+function historyDate(v) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v)); return m ? m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日' : String(v); }
+function anyAccountLabel(key, type) {
+  if (type && ACCOUNTS[type]) { const f = ACCOUNTS[type].find(function (a) { return a.key === key; }); if (f) return f.label; }
+  const all = [].concat(ACCOUNTS.income, ACCOUNTS.expense, ACCOUNTS.cogs || []); const f = all.find(function (a) { return a.key === key; });
+  return f ? f.label : '(不明な科目)';
+}
+function attachmentKindLabel(a) { return a && a.type === 'application/pdf' ? 'PDF' : (a && a.type ? '画像' : 'ファイル'); }
+// 値を画面の表示名にする。内部のキー・ID・JSON は出さない
+function historyValue(k, v, rec) {
+  const f = HISTORY_FIELDS[HISTORY_FIELD_INDEX[k]]; const how = f ? f[2] : 'other';
+  if (how === 'hidden') return '';
+  if (v === undefined || v === null || v === '') return how === 'taxReview' ? '確認済み' : '(なし)';
+  const pick = function (map) { return Object.prototype.hasOwnProperty.call(map, v) ? map[v] : '(不明な値)'; };
+  switch (how) {
+    case 'yen': return yen(v);
+    case 'date': return historyDate(v);
+    case 'int': return String(Number(v) || 0);
+    case 'years': return (Number(v) || 0) + '年';
+    case 'text': return String(v);
+    case 'kind': return pick(KIND_LABELS);
+    case 'account': return anyAccountLabel(v, rec && rec.accountType);
+    case 'accountType': return pick({ expense: '経費', cogs: '仕入', income: '収入' });
+    case 'fund': return pick({ cash: '現金', bank: '普通預金' });
+    case 'payFund': return pick({ cash: '現金', bank: '普通預金', accrued: '未払金' });
+    case 'liability': return pick({ payable: '買掛金', accrued: '未払金', loan: '借入金' });
+    case 'partner': return partnerName(v) || '(削除された取引先)';
+    case 'taxCategory': return pick(TAX_CATEGORIES);
+    case 'businessType': return Number(v) === 0 ? '未設定' : (BUSINESS_TYPES[v] ? BUSINESS_TYPES[v].label + '・' + BUSINESS_TYPES[v].rate + '%' : '(不明な値)');
+    case 'taxMethod': return pick(TAX_METHODS);
+    case 'rounding': return pick(DEPRECIATION_ROUNDING);
+    case 'disposalType': return pick({ retire: '除却(廃棄)', sale: '売却' });
+    case 'theme': return pick(THEME_LABELS);
+    case 'taxReview': return v === 'pending' ? '見直しが必要' : '確認済み';
+    case 'rate': return rateLabel(Number(v));
+    case 'receipt': return '画像あり';
+    case 'linkedAsset': { const a = findById(state.fixedAssets || [], v); return a ? a.name : '(削除された固定資産)'; }
+    case 'items': return Array.isArray(v) && v.length ? v.map(function (it) { return (it.name || '(内容なし)') + ' ' + (Number(it.qty) || 0) + ' × ' + yen(it.unitPrice) + '(' + rateLabel(itemRate({}, it)) + ')'; }).join(' / ') : '(なし)';
+    case 'attachments': return Array.isArray(v) && v.length ? v.map(function (a) { return (a.name || '名前なし') + '(' + attachmentKindLabel(a) + ')'; }).join('、') : '(なし)';
+  }
+  // 未知の項目: 真偽値・数値・短い文字はそのまま、内部の ID らしいものや入れ子は出さない
+  if (typeof v === 'boolean') return v ? 'はい' : 'いいえ';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'string' && !/^[a-z]{1,4}_[A-Za-z0-9_]+$/.test(v)) return v.slice(0, 100);
+  return '(内部の値)';
+}
+// 添付ファイルの差分は「追加した/外した」で表す
+function attachmentDiff(before, after) {
+  const ids = function (l) { return (l || []).map(function (a) { return a.id; }); };
+  const b = ids(before), a = ids(after); const out = [];
+  (after || []).forEach(function (x) { if (b.indexOf(x.id) < 0) out.push('「' + (x.name || '名前なし') + '」(' + attachmentKindLabel(x) + ')を追加'); });
+  (before || []).forEach(function (x) { if (a.indexOf(x.id) < 0) out.push('「' + (x.name || '名前なし') + '」(' + attachmentKindLabel(x) + ')を外した'); });
+  return out.join('、') || '(並びの変更)';
+}
 function historySummary(e) {
   const d = e.after || e.before || {};
-  if (e.target === 'transaction') return (d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.memo ? ' ' + d.memo : '');
-  if (e.target === 'invoice') return (d.number || '') + ' ' + (d.clientName || '');
+  if (e.target === 'transaction') return historyDate(d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.partnerId ? ' ' + (partnerName(d.partnerId) || '') : '') + (d.memo ? ' ' + d.memo : '');
+  if (e.target === 'invoice') return (d.number ? 'No.' + d.number : '') + ' ' + (d.clientName || '');
   if (e.target === 'partner') return (d.name || '') + (e.moved !== undefined ? '(取引・請求書 ' + e.moved + ' 件を付け替え)' : '');
   if (e.target === 'fixedAsset') return (d.name || '') + ' ' + yen(d.cost);
-  if (e.target === 'inventory') return (e.year || '') + '年';
+  if (e.target === 'inventory' || e.target === 'taxInterim') return (e.year || '') + '年';
   if (e.target === 'all') {
     const c = function (x) { return x ? '取引' + x.transactions + '件・請求書' + x.invoices + '件・固定資産' + x.fixedAssets + '件' : ''; };
     return c(e.before) + ' → ' + c(e.after) + (e.backup ? '(' + backupLabel(e.backup) + ')' : '');
   }
   return '';
 }
-function historyValue(k, v) {
-  if (v === undefined || v === null || v === '') return '(なし)';
-  if (k === 'amount' || k === 'cost' || k === 'openingCash' || k === 'openingBank' || k === 'opening' || k === 'closing') return yen(v);
-  if (k === 'kind') return KIND_LABELS[v] || v;
-  if (k === 'partnerId') return partnerName(v) || v;
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
+// 修正のとき、変わった項目だけを「前 → 後」で、画面の入力欄の順に並べる
+function historyDiffLines(e) {
+  if (e.action !== 'update' || !e.before || !e.after || e.target === 'all') return [];
+  const keys = Object.keys(Object.assign({}, e.before, e.after)).filter(function (k) {
+    const f = HISTORY_FIELDS[HISTORY_FIELD_INDEX[k]];
+    return !(f && f[2] === 'hidden') && JSON.stringify(e.before[k]) !== JSON.stringify(e.after[k]);
+  }).sort(function (x, y) { return (HISTORY_FIELD_INDEX[x] === undefined ? 999 : HISTORY_FIELD_INDEX[x]) - (HISTORY_FIELD_INDEX[y] === undefined ? 999 : HISTORY_FIELD_INDEX[y]); });
+  return keys.map(function (k) {
+    const label = HISTORY_FIELD_LABELS[k] || 'その他の項目';
+    if (k === 'attachments') return label + ': ' + attachmentDiff(e.before[k], e.after[k]);
+    return label + ': ' + historyValue(k, e.before[k], e.before) + ' → ' + historyValue(k, e.after[k], e.after);
+  });
 }
-// 修正のとき、変わった項目だけを「前 → 後」で並べる
 function historyDiff(e) {
   if (e.action !== 'update' || !e.before || !e.after || e.target === 'all') return '';
-  const keys = Object.keys(Object.assign({}, e.before, e.after)).filter(function (k) {
-    return k !== 'id' && k !== 'createdAt' && JSON.stringify(e.before[k]) !== JSON.stringify(e.after[k]);
-  });
-  if (!keys.length) return '<div class="muted" style="font-size:12px;">変更なし</div>';
-  return keys.map(function (k) {
-    return '<div style="font-size:12px;">' + esc(HISTORY_FIELD_LABELS[k] || k) + ': ' + esc(historyValue(k, e.before[k])) + ' → ' + esc(historyValue(k, e.after[k])) + '</div>';
-  }).join('');
+  const lines = historyDiffLines(e);
+  if (!lines.length) return '<div class="muted" style="font-size:12px;">変更なし</div>';
+  return lines.map(function (l) { return '<div style="font-size:12px;">' + esc(l) + '</div>'; }).join('');
 }
 async function openHistoryModal() {
   let lines;
