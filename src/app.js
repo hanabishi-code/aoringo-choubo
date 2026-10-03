@@ -91,6 +91,58 @@ function nodeLabel(node) {
   if (type === 'asset') return '固定資産';
   return node;
 }
+/* ============================== 検索 ============================== */
+// 仕訳帳・総勘定元帳・取引一覧の絞り込み。文字(メモ・区分・科目・金額)、日付の範囲、金額の範囲を組み合わせて使える。
+// 電子帳簿保存法の検索要件(取引年月日・取引金額の範囲指定と組み合わせ)を満たすため。取引先は取引先の機能で追加する
+const searchState = {}; // 画面ごと(entry / journal / ledger)の検索条件。タブを切り替えると消える
+function normalizeSearch(s) { return String(s || '').normalize('NFKC').toLowerCase().replace(/[\s,，¥￥円]/g, ''); }
+function emptySearch() { return { text: '', dateFrom: '', dateTo: '', amountMin: '', amountMax: '' }; }
+function getSearch(scope) { return searchState[scope] || emptySearch(); }
+function isSearchActive(q) { return !!(q.text || q.dateFrom || q.dateTo || q.amountMin !== '' || q.amountMax !== ''); }
+function txSearchText(t) {
+  const m = movementsOf(t);
+  return normalizeSearch([t.memo, KIND_LABELS[t.kind], m.map(function (x) { return nodeLabel(x.node); }).join(' '), t.date].join(' '));
+}
+function txMatches(t, q) {
+  if (q.dateFrom && (!t.date || t.date < q.dateFrom)) return false;
+  if (q.dateTo && (!t.date || t.date > q.dateTo)) return false;
+  const amt = Number(t.amount) || 0;
+  if (q.amountMin !== '' && amt < Number(q.amountMin)) return false;
+  if (q.amountMax !== '' && amt > Number(q.amountMax)) return false;
+  if (q.text) {
+    const hay = txSearchText(t);
+    // 空白で区切った語はすべて含むもの(AND)。数字だけの語は、金額とは完全一致(1100 で 11,000 は出さない)、メモ・日付とは部分一致
+    const words = String(q.text).normalize('NFKC').split(/\s+/).map(normalizeSearch).filter(Boolean);
+    if (!words.every(function (w) { return (/^\d+$/.test(w) && amt === Number(w)) || hay.indexOf(w) >= 0; })) return false;
+  }
+  return true;
+}
+function searchBarHtml(scope, note) {
+  const q = getSearch(scope);
+  return '<form class="search-bar" data-search-scope="' + scope + '" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:12px;">' +
+    '<div class="field" style="flex:2 1 180px;margin:0;"><label>文字(メモ・科目・金額)</label><input type="search" name="text" value="' + esc(q.text) + '" placeholder="例: 交通費 / 1100"></div>' +
+    '<div class="field" style="flex:1 1 130px;margin:0;"><label>日付(から)</label><input type="date" name="dateFrom" value="' + esc(q.dateFrom) + '"></div>' +
+    '<div class="field" style="flex:1 1 130px;margin:0;"><label>日付(まで)</label><input type="date" name="dateTo" value="' + esc(q.dateTo) + '"></div>' +
+    '<div class="field" style="flex:1 1 110px;margin:0;"><label>金額(以上)</label><input type="number" name="amountMin" min="0" step="1" value="' + esc(q.amountMin) + '"></div>' +
+    '<div class="field" style="flex:1 1 110px;margin:0;"><label>金額(以下)</label><input type="number" name="amountMax" min="0" step="1" value="' + esc(q.amountMax) + '"></div>' +
+    '<div style="display:flex;gap:6px;"><button type="submit" class="btn secondary small">検索</button>' + (isSearchActive(q) ? '<button type="button" class="btn ghost small" data-search-clear>クリア</button>' : '') + '</div>' +
+    (note && isSearchActive(q) ? '<div class="muted" style="flex-basis:100%;font-size:12px;">' + esc(note) + '</div>' : '') +
+  '</form>';
+}
+function bindSearchBars() {
+  document.querySelectorAll('form.search-bar').forEach(function (f) {
+    const scope = f.dataset.searchScope;
+    f.addEventListener('submit', function (e) {
+      e.preventDefault();
+      const v = function (n) { return f.elements[n].value.trim(); };
+      searchState[scope] = { text: v('text'), dateFrom: v('dateFrom'), dateTo: v('dateTo'), amountMin: v('amountMin'), amountMax: v('amountMax') };
+      renderView();
+    });
+    const clear = f.querySelector('[data-search-clear]');
+    if (clear) clear.addEventListener('click', function () { delete searchState[scope]; renderView(); });
+  });
+}
+
 function journalOf(tx) {
   const m = movementsOf(tx);
   const d = m.find(function (x) { return x.side === 'debit'; });
@@ -576,7 +628,7 @@ function renderShell() {
       '<div class="brand"><h1>青りんご帳簿</h1><div class="sub">' + esc(state.settings.businessName || '個人事業主の複式簿記') + '</div></div>' +
       '<div class="balance-chip"><div class="lbl">現金+預金残高</div><div class="val num">' + yen(cash + bank) + '</div></div>' +
     '</div><nav class="tabs">' + tabsHtml + '</nav></header><main id="view"></main>';
-  document.querySelectorAll('nav.tabs button').forEach(function (b) { b.addEventListener('click', function () { currentTab = b.dataset.tab; editingTxId = null; renderShell(); }); });
+  document.querySelectorAll('nav.tabs button').forEach(function (b) { b.addEventListener('click', function () { currentTab = b.dataset.tab; editingTxId = null; Object.keys(searchState).forEach(function (k) { delete searchState[k]; }); renderShell(); }); });
   renderView();
 }
 function hankoSvg() {
@@ -676,7 +728,10 @@ function fundRadio(k, current) { return '<label><input type="radio" name="fund" 
 function viewEntry() {
   const editing = editingTxId ? state.transactions.find(function (t) { return t.id === editingTxId; }) : null;
   const kind = editing ? editing.kind : 'expense';
-  const recent = state.transactions.slice().sort(function (a, b) { return (b.date + b.createdAt) < (a.date + a.createdAt) ? -1 : 1; }).slice(0, 25);
+  const q = getSearch('entry'); const searching = isSearchActive(q);
+  const sorted = state.transactions.slice().sort(function (a, b) { return (b.date + b.createdAt) < (a.date + a.createdAt) ? -1 : 1; });
+  const matched = searching ? sorted.filter(function (t) { return txMatches(t, q); }) : sorted;
+  const recent = matched.slice(0, searching ? 300 : 25);
   return (
     '<section class="block"><h2>' + (editing ? '取引を編集' : '取引を記録') + '</h2>' + storageFlag() +
       '<form id="tx-form">' +
@@ -697,8 +752,8 @@ function viewEntry() {
         '</div>' +
       '</form>' +
     '</section>' +
-    '<section class="block"><h2>最近の記録</h2>' +
-      (recent.length ? recent.map(txRowHtml).join('') : '<div class="muted" style="padding:16px 0;">まだ記録がありません。上のフォームから最初の取引を記録しましょう。</div>') +
+    '<section class="block"><h2>' + (searching ? '検索結果(' + matched.length + ' 件' + (matched.length > recent.length ? '・新しい順に ' + recent.length + ' 件を表示' : '') + ')' : '最近の記録') + '</h2>' + searchBarHtml('entry', 'すべての年から探します') +
+      (recent.length ? recent.map(txRowHtml).join('') : '<div class="muted" style="padding:16px 0;">' + (searching ? '条件に合う取引はありません。' : 'まだ記録がありません。上のフォームから最初の取引を記録しましょう。') + '</div>') +
     '</section>'
   );
 }
@@ -715,13 +770,16 @@ function txRowHtml(t) {
 /* ============================== 仕訳帳タブ ============================== */
 function viewJournal() {
   const years = availableYears(); const y = window.__journalYear || years[0] || new Date().getFullYear(); const m = window.__journalMonth || 0;
-  const rows = state.transactions.filter(function (t) { return t.date && t.date.slice(0, 4) === String(y) && (m === 0 || Number(t.date.slice(5, 7)) === m); })
+  const q = getSearch('journal'); const searching = isSearchActive(q);
+  // 検索中は年・月の選択を使わず、すべての年から探す
+  const rows = state.transactions.filter(function (t) { return searching ? txMatches(t, q) : (t.date && t.date.slice(0, 4) === String(y) && (m === 0 || Number(t.date.slice(5, 7)) === m)); })
     .sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
   const monthOptions = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(function (mo) { return '<option value="' + mo + '" ' + (mo === m ? 'selected' : '') + '>' + (mo === 0 ? '全月' : mo + '月') + '</option>'; }).join('');
   const yearOptions = years.map(function (yr) { return '<option value="' + yr + '" ' + (yr === y ? 'selected' : '') + '>' + yr + '年</option>'; }).join('');
   return (
-    '<section class="block"><h2>仕訳帳</h2>' +
-      '<div style="display:flex; gap:8px; margin-bottom:14px;"><select class="year-select" id="journal-year">' + yearOptions + '</select><select class="year-select" id="journal-month">' + monthOptions + '</select></div>' +
+    '<section class="block"><h2>仕訳帳' + (searching ? '(検索結果 ' + rows.length + ' 件)' : '') + '</h2>' +
+      '<div style="display:flex; gap:8px; margin-bottom:14px;"><select class="year-select" id="journal-year"' + (searching ? ' disabled' : '') + '>' + yearOptions + '</select><select class="year-select" id="journal-month"' + (searching ? ' disabled' : '') + '>' + monthOptions + '</select></div>' +
+      searchBarHtml('journal', '検索中は年・月の選択を使わず、すべての年から探します') +
       '<div class="table-scroll"><table class="ledger"><tr><th>日付</th><th>借方科目</th><th class="num">借方金額</th><th>貸方科目</th><th class="num">貸方金額</th><th>摘要</th></tr>' +
         (rows.length ? rows.map(function (t) { const j = journalOf(t); return '<tr><td>' + esc(t.date) + '</td><td>' + esc(j.debit) + '</td><td class="num">' + yen(t.amount) + '</td><td>' + esc(j.credit) + '</td><td class="num">' + yen(t.amount) + '</td><td class="muted">' + esc(t.memo || '') + '</td></tr>'; }).join('') : '<tr><td colspan="6" class="muted" style="padding:20px 6px;">この期間の記録はありません</td></tr>') +
       '</table></div>' +
@@ -745,6 +803,7 @@ function viewLedger() {
   const debitNormal = isDebitNormal(node);
   const openingNote = (node.indexOf('fund:') === 0) ? fundBalance(node.split(':')[1], String(y - 1) + '-12-31') : 0;
   let running = openingNote;
+  const ledgerQ = getSearch('ledger'); const ledgerSearching = isSearchActive(ledgerQ);
   const rows = state.transactions.filter(function (t) { return t.date && t.date.slice(0, 4) === String(y); })
     .sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); })
     .map(function (t) {
@@ -753,11 +812,14 @@ function viewLedger() {
       if (!hit) return null;
       running += debitNormal ? (debit - credit) : (credit - debit);
       const other = movementsOf(t).filter(function (m) { return m.node !== node; }).map(function (m) { return nodeLabel(m.node); }).join('/');
-      return { date: t.date, other: other, debit: debit, credit: credit, balance: running, memo: t.memo };
-    }).filter(Boolean);
+      return { date: t.date, other: other, debit: debit, credit: credit, balance: running, memo: t.memo, tx: t };
+    }).filter(Boolean)
+    // 検索は残高を計算したあとに絞り込む(表示される残高はその時点の正しい残高)
+    .filter(function (r) { return !ledgerSearching || txMatches(r.tx, ledgerQ); });
   return (
-    '<section class="block"><h2>総勘定元帳</h2>' +
+    '<section class="block"><h2>総勘定元帳' + (ledgerSearching ? '(検索結果 ' + rows.length + ' 件)' : '') + '</h2>' +
       '<div style="display:flex; gap:8px; margin-bottom:14px;"><select class="year-select" id="ledger-year">' + yearOptions + '</select><select class="year-select" id="ledger-node">' + optionsHtml + '</select></div>' +
+      searchBarHtml('ledger', '選んだ年・科目の中から探します。残高は絞り込む前の、その時点の残高です') +
       (node.indexOf('fund:') === 0 ? '<div class="note">前年繰越残高: ' + yen(openingNote) + '</div>' : '') +
       '<div class="table-scroll"><table class="ledger"><tr><th>日付</th><th>相手科目</th><th class="num">借方</th><th class="num">貸方</th><th class="num">残高</th></tr>' +
         (rows.length ? rows.map(function (r) { return '<tr><td>' + esc(r.date) + '</td><td class="muted">' + esc(r.other) + (r.memo ? '(' + esc(r.memo) + ')' : '') + '</td><td class="num">' + (r.debit ? yen(r.debit) : '') + '</td><td class="num">' + (r.credit ? yen(r.credit) : '') + '</td><td class="num">' + yen(r.balance) + '</td></tr>'; }).join('') : '<tr><td colspan="5" class="muted" style="padding:20px 6px;">この年の記録はありません</td></tr>') +
@@ -1116,6 +1178,7 @@ function viewSettings() {
 /* ============================== イベント束ね ============================== */
 function bindViewEvents() {
   hydrateReceipts();
+  bindSearchBars();
   const txForm = document.getElementById('tx-form');
   if (txForm) {
     const editing = editingTxId ? state.transactions.find(function (t) { return t.id === editingTxId; }) : null;

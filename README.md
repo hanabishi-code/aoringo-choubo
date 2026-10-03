@@ -23,6 +23,7 @@
 - レシート・領収書の画像の添付(JPEG / PNG / iPhone の HEIC)
 - 取引一覧・損益計算書の CSV 書き出し
 - 変更履歴(いつ・何を追加/修正/削除したか)の閲覧
+- 検索(仕訳帳・総勘定元帳・取引一覧): 文字(メモ・科目・金額)、日付の範囲、金額の範囲を組み合わせて絞り込み
 - 自動バックアップからの復元、バックアップファイル(JSON)の書き出し・取り込み
 
 ## 動作環境
@@ -116,6 +117,7 @@ osascript -l JavaScript tests/check_calc.js          # 仕訳・減価償却・�
 osascript -l JavaScript tests/check_import.js        # バックアップ取り込みの検証
 osascript -l JavaScript tests/check_receipt_ipc.js   # レシート画像の受け渡し
 osascript -l JavaScript tests/check_history.js       # 変更履歴(強制終了後の後始末の判定)
+osascript -l JavaScript tests/check_search.js        # 検索(文字・日付・金額の範囲と組み合わせ)
 ```
 
 ## 減価償却の計算について
