@@ -5,7 +5,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, sanitizeBackup: sanitizeBackup, partnerSummary: partnerSummary, txMatches: txMatches, emptySearch: emptySearch, Store: Store, findPartnerByName: findPartnerByName, SCHEMA_VERSION: SCHEMA_VERSION };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, sanitizeBackup: sanitizeBackup, partnerSummary: partnerSummary, txMatches: txMatches, emptySearch: emptySearch, Store: Store, findPartnerByName: findPartnerByName, SCHEMA_VERSION: SCHEMA_VERSION, invoiceMatches: invoiceMatches };'))(document, window, localStorage);
 var results = [];
 function check(name, actual, expected) {
   var ok = JSON.stringify(actual) === JSON.stringify(expected);
@@ -58,5 +58,18 @@ check('検索: 取引先 × 日付 × 金額の組み合わせ', find({ partnerI
 app.Store.mergePartner('pt_b', 'pt_a');
 check('統合: B社の取引を A社 に付け替え、B社は一覧から消える', [s.partners.map(function (p) { return p.name; }), find({ partnerId: 'pt_a' })], [['A社'], ['t1', 't2', 't3', 't4']]);
 check('名前で探す(全角/半角・前後の空白を無視)', app.findPartnerByName(' Ａ社') && app.findPartnerByName(' Ａ社').id, 'pt_a');
+
+/* 6. 請求書の検索(取引先・状態・発行日・合計・文字) */
+var invs = [
+  { id: 'i1', number: '2026-001', issueDate: '2026-09-30', transactionDate: '2026年9月分', clientName: 'A社', partnerId: 'pt_a', status: '送付済み(未入金)', taxRounding: 'floor', notes: '', items: [{ name: 'システム保守', qty: 1, unitPrice: 100000, taxRate: 10 }] },
+  { id: 'i2', number: '2026-002', issueDate: '2026-10-31', transactionDate: '2026年10月分', clientName: 'A社', partnerId: 'pt_a', status: '入金済み', taxRounding: 'floor', notes: '振込済', items: [{ name: 'デザイン', qty: 2, unitPrice: 30000, taxRate: 10 }] },
+  { id: 'i3', number: '2026-003', issueDate: '2026-10-15', clientName: '個人のお客様', status: '下書き', taxRounding: 'floor', items: [{ name: '食品', qty: 1, unitPrice: 1000, taxRate: 8 }] }];
+function findInv(q) { return invs.filter(function (i) { return app.invoiceMatches(i, Object.assign(app.emptySearch(), q)); }).map(function (i) { return i.id; }); }
+check('請求書の検索: 取引先 / 未設定', [findInv({ partnerId: 'pt_a' }), findInv({ partnerId: '-' })], [['i1', 'i2'], ['i3']]);
+check('請求書の検索: 状態', [findInv({ status: '送付済み(未入金)' }), findInv({ status: '下書き' })], [['i1'], ['i3']]);
+check('請求書の検索: 発行日の範囲', findInv({ dateFrom: '2026-10-01', dateTo: '2026-10-31' }), ['i2', 'i3']);
+check('請求書の検索: 合計(税込)の範囲 / 合計の金額そのもの', [findInv({ amountMin: '60000', amountMax: '70000' }), findInv({ text: '110,000' })], [['i2'], ['i1']]);
+check('請求書の検索: 文字(明細・取引年月日・備考・番号)', [findInv({ text: '保守' }), findInv({ text: '10月分' }), findInv({ text: '振込済' }), findInv({ text: '003' })], [['i1'], ['i2'], ['i2'], ['i3']]);
+check('請求書の検索: 組み合わせ(取引先 × 状態 × 文字)', findInv({ partnerId: 'pt_a', status: '入金済み', text: 'デザイン' }), ['i2']);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';

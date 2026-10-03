@@ -98,9 +98,9 @@ function nodeLabel(node) {
 // 電子帳簿保存法の検索要件(取引年月日・取引金額の範囲指定と組み合わせ)を満たすため。取引先は取引先の機能で追加する
 const searchState = {}; // 画面ごと(entry / journal / ledger)の検索条件。タブを切り替えると消える
 function normalizeSearch(s) { return String(s || '').normalize('NFKC').toLowerCase().replace(/[\s,，¥￥円]/g, ''); }
-function emptySearch() { return { text: '', dateFrom: '', dateTo: '', amountMin: '', amountMax: '', partnerId: '' }; }
+function emptySearch() { return { text: '', dateFrom: '', dateTo: '', amountMin: '', amountMax: '', partnerId: '', status: '' }; }
 function getSearch(scope) { return searchState[scope] || emptySearch(); }
-function isSearchActive(q) { return !!(q.text || q.dateFrom || q.dateTo || q.amountMin !== '' || q.amountMax !== '' || q.partnerId); }
+function isSearchActive(q) { return !!(q.text || q.dateFrom || q.dateTo || q.amountMin !== '' || q.amountMax !== '' || q.partnerId || q.status); }
 function txSearchText(t) {
   const m = movementsOf(t);
   return normalizeSearch([t.memo, partnerName(t.partnerId), KIND_LABELS[t.kind], m.map(function (x) { return nodeLabel(x.node); }).join(' '), t.date].join(' '));
@@ -120,15 +120,33 @@ function txMatches(t, q) {
   }
   return true;
 }
+// 請求書の検索: 取引先・状態・発行日の範囲・金額(税込合計)の範囲・文字(番号・宛先・明細・備考・取引年月日)
+function invoiceMatches(inv, q) {
+  if (q.partnerId && (q.partnerId === '-' ? inv.partnerId : inv.partnerId !== q.partnerId)) return false;
+  if (q.status && (inv.status || '下書き') !== q.status) return false;
+  if (q.dateFrom && (!inv.issueDate || inv.issueDate < q.dateFrom)) return false;
+  if (q.dateTo && (!inv.issueDate || inv.issueDate > q.dateTo)) return false;
+  const total = invoiceTotals(inv).total;
+  if (q.amountMin !== '' && total < Number(q.amountMin)) return false;
+  if (q.amountMax !== '' && total > Number(q.amountMax)) return false;
+  if (q.text) {
+    const hay = normalizeSearch([inv.number, inv.clientName, inv.clientAddress, partnerName(inv.partnerId), inv.transactionDate, inv.notes, (inv.items || []).map(function (it) { return it.name; }).join(' '), inv.issueDate].join(' '));
+    const words = String(q.text).normalize('NFKC').split(/\s+/).map(normalizeSearch).filter(Boolean);
+    if (!words.every(function (w) { return (/^\d+$/.test(w) && total === Number(w)) || hay.indexOf(w) >= 0; })) return false;
+  }
+  return true;
+}
 function searchBarHtml(scope, note) {
+  const isInv = scope === 'invoice';
   const q = getSearch(scope);
   return '<form class="search-bar" data-search-scope="' + scope + '" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;margin-bottom:12px;">' +
     '<div class="field" style="flex:1 1 140px;margin:0;"><label>取引先</label><select name="partnerId"><option value="">すべて</option><option value="-"' + (q.partnerId === '-' ? ' selected' : '') + '>未設定</option>' + (state.partners || []).slice().sort(function (a, b) { return a.name < b.name ? -1 : 1; }).map(function (p) { return '<option value="' + esc(p.id) + '"' + (q.partnerId === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></div>' +
-    '<div class="field" style="flex:2 1 180px;margin:0;"><label>文字(メモ・取引先・科目・金額)</label><input type="search" name="text" value="' + esc(q.text) + '" placeholder="例: 交通費 / 1100"></div>' +
-    '<div class="field" style="flex:1 1 130px;margin:0;"><label>日付(から)</label><input type="date" name="dateFrom" value="' + esc(q.dateFrom) + '"></div>' +
-    '<div class="field" style="flex:1 1 130px;margin:0;"><label>日付(まで)</label><input type="date" name="dateTo" value="' + esc(q.dateTo) + '"></div>' +
-    '<div class="field" style="flex:1 1 110px;margin:0;"><label>金額(以上)</label><input type="number" name="amountMin" min="0" step="1" value="' + esc(q.amountMin) + '"></div>' +
-    '<div class="field" style="flex:1 1 110px;margin:0;"><label>金額(以下)</label><input type="number" name="amountMax" min="0" step="1" value="' + esc(q.amountMax) + '"></div>' +
+    (isInv ? '<div class="field" style="flex:1 1 140px;margin:0;"><label>状態</label><select name="status"><option value="">すべて</option>' + INVOICE_STATUSES.map(function (st) { return '<option' + (q.status === st ? ' selected' : '') + '>' + st + '</option>'; }).join('') + '</select></div>' : '') +
+    '<div class="field" style="flex:2 1 180px;margin:0;"><label>' + (isInv ? '文字(番号・宛先・明細・備考・取引年月日)' : '文字(メモ・取引先・科目・金額)') + '</label><input type="search" name="text" value="' + esc(q.text) + '" placeholder="' + (isInv ? '例: 9月分 / 保守' : '例: 交通費 / 1100') + '"></div>' +
+    '<div class="field" style="flex:1 1 130px;margin:0;"><label>' + (isInv ? '発行日(から)' : '日付(から)') + '</label><input type="date" name="dateFrom" value="' + esc(q.dateFrom) + '"></div>' +
+    '<div class="field" style="flex:1 1 130px;margin:0;"><label>' + (isInv ? '発行日(まで)' : '日付(まで)') + '</label><input type="date" name="dateTo" value="' + esc(q.dateTo) + '"></div>' +
+    '<div class="field" style="flex:1 1 110px;margin:0;"><label>' + (isInv ? '合計(税込・以上)' : '金額(以上)') + '</label><input type="number" name="amountMin" min="0" step="1" value="' + esc(q.amountMin) + '"></div>' +
+    '<div class="field" style="flex:1 1 110px;margin:0;"><label>' + (isInv ? '合計(税込・以下)' : '金額(以下)') + '</label><input type="number" name="amountMax" min="0" step="1" value="' + esc(q.amountMax) + '"></div>' +
     '<div style="display:flex;gap:6px;"><button type="submit" class="btn secondary small">検索</button>' + (isSearchActive(q) ? '<button type="button" class="btn ghost small" data-search-clear>クリア</button>' : '') + '</div>' +
     (note && isSearchActive(q) ? '<div class="muted" style="flex-basis:100%;font-size:12px;">' + esc(note) + '</div>' : '') +
   '</form>';
@@ -139,7 +157,7 @@ function bindSearchBars() {
     f.addEventListener('submit', function (e) {
       e.preventDefault();
       const v = function (n) { return f.elements[n].value.trim(); };
-      searchState[scope] = { text: v('text'), dateFrom: v('dateFrom'), dateTo: v('dateTo'), amountMin: v('amountMin'), amountMax: v('amountMax'), partnerId: v('partnerId') };
+      searchState[scope] = { text: v('text'), dateFrom: v('dateFrom'), dateTo: v('dateTo'), amountMin: v('amountMin'), amountMax: v('amountMax'), partnerId: v('partnerId'), status: f.elements.status ? v('status') : '' };
       renderView();
     });
     const clear = f.querySelector('[data-search-clear]');
@@ -1308,10 +1326,13 @@ function viewBS() {
 /* ============================== 請求書タブ ============================== */
 function viewInvoiceList() {
   if (invoiceDraft) return viewInvoiceForm();
-  const list = state.invoices.slice().sort(function (a, b) { return (b.issueDate || '') < (a.issueDate || '') ? -1 : 1; });
+  const q = getSearch('invoice'); const searching = isSearchActive(q);
+  const all = state.invoices.slice().sort(function (a, b) { return (b.issueDate || '') < (a.issueDate || '') ? -1 : 1; });
+  const list = searching ? all.filter(function (inv) { return invoiceMatches(inv, q); }) : all;
   return (
-    '<section class="block"><h2>請求書</h2><button class="btn block" id="new-invoice">新しい請求書を作成</button>' +
-      (list.length ? list.map(invoiceRowHtml).join('') : '<div class="muted" style="padding:16px 0;">まだ請求書がありません</div>') +
+    '<section class="block"><h2>請求書' + (searching ? '(検索結果 ' + list.length + ' 件)' : '') + '</h2><button class="btn block" id="new-invoice" style="margin-bottom:12px;">新しい請求書を作成</button>' +
+      (all.length ? searchBarHtml('invoice', '日付は発行日で探します。取引年月日(「9月分」など)は文字で探せます') : '') +
+      (list.length ? list.map(invoiceRowHtml).join('') : '<div class="muted" style="padding:16px 0;">' + (searching ? '条件に合う請求書はありません' : 'まだ請求書がありません') + '</div>') +
       '<div class="note">入金があったら、忘れずに「入力」タブから収入として記録してください(請求書の作成だけでは帳簿に反映されません)。</div>' +
     '</section>'
   );
@@ -1458,7 +1479,7 @@ function viewPartners() {
     '<div style="margin-bottom:12px;"><select class="year-select" id="partner-year">' + yearOptions + '</select><span class="muted" style="margin-left:8px;font-size:12px;">未払金・買掛金は年末時点の残高、未入金の請求書は「送付済み(未入金)」の合計</span></div>' +
     '<div class="table-scroll"><table class="ledger compact"><tr><th>取引先</th><th class="num">売上</th><th class="num">経費・仕入</th><th class="num">未払金・買掛金</th><th class="num">未入金の請求書</th></tr>' +
     (rows.length ? rows.map(function (r) {
-      return '<tr><td><a data-partner-sel="' + esc(r.id) + '" style="cursor:pointer;">' + esc(r.id === '-' ? '(未設定)' : partnerName(r.id)) + '</a></td><td class="num">' + money(r.sales) + '</td><td class="num">' + money(r.costs) + '</td><td class="num">' + money(r.payable) + '</td><td class="num">' + money(r.unpaid) + '</td></tr>';
+      return '<tr><td><a data-partner-sel="' + esc(r.id) + '" style="cursor:pointer;">' + esc(r.id === '-' ? '(未設定)' : partnerName(r.id)) + '</a> <a data-partner-invoices="' + esc(r.id) + '" style="cursor:pointer;font-size:11px;margin-left:6px;">請求書</a></td><td class="num">' + money(r.sales) + '</td><td class="num">' + money(r.costs) + '</td><td class="num">' + money(r.payable) + '</td><td class="num">' + money(r.unpaid) + '</td></tr>';
     }).join('') : '<tr><td colspan="5" class="muted" style="padding:16px 6px;">この年の取引はありません</td></tr>') +
     '</table></div></section>' +
     (detail ? '<section class="block"><h2>' + esc(sel === '-' ? '取引先が未設定の取引' : partnerName(sel) + 'の取引') + '(新しい順・' + detail.length + ' 件)</h2><a data-partner-sel="" style="cursor:pointer;font-size:12px;">閉じる</a>' +
@@ -1475,6 +1496,12 @@ function viewPartners() {
 }
 function bindPartnerEvents() {
   const py = document.getElementById('partner-year'); if (py) py.addEventListener('change', function () { window.__partnerYear = Number(py.value); renderView(); });
+  // その取引先の請求書の一覧(請求書タブを取引先で絞り込んだ状態で開く)
+  document.querySelectorAll('[data-partner-invoices]').forEach(function (a) { a.addEventListener('click', function () {
+    Object.keys(searchState).forEach(function (k) { delete searchState[k]; });
+    searchState.invoice = Object.assign(emptySearch(), { partnerId: a.dataset.partnerInvoices });
+    invoiceDraft = null; currentTab = 'invoice'; renderShell(); window.scrollTo(0, 0);
+  }); });
   document.querySelectorAll('[data-partner-sel]').forEach(function (a) { a.addEventListener('click', function () { window.__partnerSel = a.dataset.partnerSel || null; renderView(); }); });
   document.querySelectorAll('[data-partner-edit]').forEach(function (a) { a.addEventListener('click', function () {
     const p = findById(state.partners, a.dataset.partnerEdit); if (!p) return;
