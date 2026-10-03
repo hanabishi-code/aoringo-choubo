@@ -1,6 +1,6 @@
-# 経理ノート — Claude Code 向け作業指示
+# 青りんご帳簿 — Claude Code 向け作業指示
 
-個人事業主向けの複式簿記アプリ。画面は `src/`(index.html / styles.css / app.js)、Mac アプリ側は `src-tauri/`(Tauri v2・Rust)。
+個人事業主向けの複式簿記アプリ「青りんご帳簿」(旧名: 経理ノート)。画面は `src/`(index.html / styles.css / app.js)、Mac アプリ側は `src-tauri/`(Tauri v2・Rust)。
 旧ブラウザ版は `legacy/index.html`(ブラウザで開いてもアプリにはならない)。
 目標は **Mac用オフラインデスクトップアプリ(Tauri v2)として GitHub で公開**すること。
 
@@ -9,6 +9,8 @@
   - 例外: Tauri 版ではアプリ内部 IPC のため `connect-src ipc: http://ipc.localhost` のみ許可(外部通信ではない。2026-09-27 ユーザー承認)
 - データは Mac 上の通常ファイルに保存し、Time Machine の対象にする
 - 保存先: `~/Library/Application Support/<bundle id>/`。iCloud Drive には本体を置かない
+- identifier `com.keirinote.desktop`・バックアップの `app: 'keiri-note'`・Cargo のパッケージ名 `keiri-note` は旧名のまま変えない
+  (変えると保存先が変わり既存データが読めなくなる/以前のバックアップを取り込めなくなる)
 - アプリ側の自動バックアップ+世代管理を持つ
 - Apple の署名・公証は当面しない(未署名で配布、README に開き方を記載)
 - 税務の正確性は保証しない旨を免責として明記する
