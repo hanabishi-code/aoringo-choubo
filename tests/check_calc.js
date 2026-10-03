@@ -16,6 +16,8 @@ function check(name, actual, expected, note) {
 function reset(settings) {
   app.state.transactions = []; app.state.invoices = []; app.state.fixedAssets = []; app.state.inventoryYearEnd = {};
   app.state.settings = Object.assign(app.defaultSettings(), settings || {});
+  // v9 から預金の開始残高は口座ごと。テストでは openingBank を最初の口座(普通預金)の開始残高として使う
+  app.state.bankAccounts = [{ id: 'bank', name: '普通預金', opening: Number((settings || {}).openingBank) || 0 }];
 }
 var n = 0;
 function tx(kind, date, amount, extra) { app.state.transactions.push(Object.assign({ id: 'tx_t' + (++n), kind: kind, date: date, amount: amount }, extra || {})); }

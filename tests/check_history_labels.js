@@ -21,7 +21,7 @@ var MODEL = {
   transaction: ['id', 'kind', 'date', 'amount', 'memo', 'fund', 'account', 'accountType', 'liability', 'partnerId', 'taxCategory', 'businessType', 'attachments', 'receiptAssetId', 'linkedAssetId', 'createdAt'],
   invoice: ['id', 'number', 'issueDate', 'transactionDate', 'dueDate', 'clientName', 'clientAddress', 'partnerId', 'status', 'items', 'taxRate', 'taxRounding', 'notes', 'attachments', 'createdAt'],
   fixedAsset: ['id', 'name', 'acquisitionDate', 'cost', 'usefulLifeYears', 'payFund', 'disposalDate', 'disposalType', 'saleAmount', 'saleFund'],
-  inventory: ['opening', 'closing'], taxInterim: ['national', 'local'], partner: ['id', 'name', 'address']
+  inventory: ['opening', 'closing'], taxInterim: ['national', 'local'], partner: ['id', 'name', 'address'], bankAccount: ['id', 'name', 'opening']
 };
 var missing = [];
 Object.keys(MODEL).forEach(function (t) { MODEL[t].forEach(function (k) { if (!known[k]) missing.push(t + '.' + k); }); });
@@ -31,7 +31,7 @@ var unlabeled = app.HISTORY_FIELDS.filter(function (f) { return f[2] !== 'hidden
 check('表示する項目には必ず表示名がある', unlabeled, []);
 
 // 取り込みの検証を通したあとの項目も、すべて HISTORY_FIELDS にある(sanitizeBackup が新しい項目を通すようになったら検出)
-var full = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 8,
+var full = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 9,
   transactions: [{ id: 'tx_1', kind: 'income', date: '2026-01-01', amount: 1, memo: 'm', fund: 'bank', account: 'sales', partnerId: 'pt_1', taxCategory: 'standard', businessType: 3, attachments: [{ id: 'rc_1', type: 'application/pdf', name: 'a.pdf', addedAt: '2026-01-01' }], linkedAssetId: 'fa_1', createdAt: '2026-01-01' }],
   invoices: [{ id: 'inv_1', number: '1', issueDate: '2026-01-01', transactionDate: '1月分', dueDate: '2026-02-01', clientName: 'A', clientAddress: 'B', partnerId: 'pt_1', status: '下書き', items: [{ name: 'x', qty: 1, unitPrice: 1, taxRate: 10 }], taxRounding: 'floor', notes: 'n', attachments: [] }],
   fixedAssets: [{ id: 'fa_1', name: 'PC', acquisitionDate: '2025-01-01', cost: 1, usefulLifeYears: 4, payFund: 'bank', disposalDate: '2026-01-01', disposalType: 'sale', saleAmount: 1, saleFund: 'cash' }],
@@ -49,14 +49,15 @@ check('課税方式(未設定以外)', bad('taxMethod', Object.keys(app.TAX_METH
 check('事業区分', bad('businessType', Object.keys(app.BUSINESS_TYPES).map(Number)), []);
 check('端数処理', bad('taxRounding', Object.keys(app.DEPRECIATION_ROUNDING)), []);
 check('表示テーマ', bad('theme', Object.keys(app.THEME_LABELS)), []);
-check('資金・受け取り先・支払い方法', [bad('fund', ['cash', 'bank']), bad('saleFund', ['cash', 'bank']), bad('payFund', ['cash', 'bank', 'accrued'])], [[], [], []]);
+check('資金・受け取り先・支払い方法(口座名)', [bad('fund', ['cash', 'bank']), bad('saleFund', ['cash', 'bank']), bad('payFund', ['cash', 'bank', 'accrued'])], [[], [], []]);
+check('口座の開始残高は「開始残高」(棚卸高ではない)', app.historyDiffLines({ action: 'update', target: 'bankAccount', before: { id: 'bank', name: 'A', opening: 0 }, after: { id: 'bank', name: 'B', opening: 1000 } }), ['口座の名前: A → B', '開始残高: ¥0 → ¥1,000']);
 check('負債の科目・処分の種類・科目の区分', [bad('liability', ['payable', 'accrued', 'loan']), bad('disposalType', ['retire', 'sale']), bad('accountType', ['expense', 'cogs'])], [[], [], []]);
 var allAccounts = [].concat(app.ACCOUNTS.income, app.ACCOUNTS.expense, app.ACCOUNTS.cogs || []).map(function (a) { return a.key; });
 check('勘定科目(すべて)', bad('account', allAccounts), []);
 check('日付・金額・耐用年数・税率', [app.historyValue('date', '2026-10-03'), app.historyValue('amount', 12345), app.historyValue('usefulLifeYears', 4), app.historyValue('taxRate', 8)], ['2026年10月3日', '¥12,345', '4年', '8%(軽減)']);
 
 // 3. 差分の表示に、内部キー・JSON・ID が出ない
-app.state.partners = [{ id: 'pt_1', name: '株式会社テスト' }]; app.state.fixedAssets = [{ id: 'fa_1', name: '営業車' }];
+app.state.partners = [{ id: 'pt_1', name: '株式会社テスト' }]; app.state.bankAccounts = [{ id: 'bank', name: '普通預金', opening: 0 }]; app.state.fixedAssets = [{ id: 'fa_1', name: '営業車' }];
 var before = { id: 'tx_1', kind: 'expense', date: '2026-01-01', amount: 1000, fund: 'cash', account: 'supplies', taxCategory: 'standard', attachments: [{ id: 'rc_1', type: 'image/jpeg', name: 'レシート.jpg' }], createdAt: 'x' };
 var after = { id: 'tx_1', kind: 'expense', date: '2026-01-02', amount: 1100, fund: 'bank', account: 'travel', partnerId: 'pt_1', taxCategory: 'reduced', attachments: [{ id: 'rc_2', type: 'application/pdf', name: '請求書.pdf' }], linkedAssetId: 'fa_1', mysteryKey: 'tx_abc123', createdAt: 'x' };
 var lines = app.historyDiffLines({ action: 'update', target: 'transaction', before: before, after: after });

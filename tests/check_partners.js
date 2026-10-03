@@ -23,7 +23,7 @@ var m = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 7,
 check('移行: 請求書の宛先から取引先を作る(同じ名前は1つ、空は作らない)', m.partners.map(function (p) { return [p.name, p.address || '']; }), [['株式会社テスト', '東京都'], ['別の会社', '']]);
 check('移行: 請求書が取引先とつながる', m.invoices.map(function (i) { return i.partnerId ? m.partners.find(function (p) { return p.id === i.partnerId; }).name : '-'; }), ['株式会社テスト', '株式会社テスト', '別の会社', '-']);
 check('移行: 取引のメモからは推定しない(取引先は未設定のまま)', m.transactions[0].partnerId, undefined);
-check('SCHEMA_VERSION は 8', app.SCHEMA_VERSION, 8);
+check('SCHEMA_VERSION は 8 以上(最新の版数は tests/check_accounts.js)', app.SCHEMA_VERSION >= 8, true);
 
 /* 2. 取り込みの検証 */
 var bad = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 8,
