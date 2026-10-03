@@ -84,7 +84,17 @@
 cd src-tauri
 cargo build                      # 開発ビルド
 ./target/debug/keiri-note        # 開発ビルドを起動
-cargo tauri build                # 配布用(.app / .dmg)
+```
+
+### 配布用のビルド
+
+- **配布するアプリは GitHub Actions 上でビルドしたものだけです。** 手元の Mac でビルドしたアプリは配布しません
+  (Rust の実行ファイルには、ビルドした Mac のユーザー名を含むフォルダのパスが埋め込まれるため)
+- 手元で配布用と同じ形(Intel / Apple シリコンの universal)を試すときは、次のスクリプトを使います。
+  パスをユーザー名を含まない形に置き換えてビルドし、実行ファイルにユーザー名が 0 件であることを確かめます
+
+```bash
+./scripts/build-release-local.sh
 ```
 
 > [!NOTE]
