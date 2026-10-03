@@ -1,0 +1,32 @@
+# テストだけを動かす(main への push と pull request)。読み取り権限のみ。シークレットは使わない
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v7.0.1(GitHub が検証済みのコミット)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Rust のテスト
+        working-directory: src-tauri
+        run: cargo test
+      - name: 画面側のテスト(macOS の JavaScript)
+        run: |
+          for t in check_calc check_tax check_partners check_accounts check_attach check_search check_history check_history_labels; do
+            out="$(osascript -l JavaScript "tests/$t.js")"
+            echo "$out" | tail -1
+            echo "$out" | tail -1 | grep -q '^0 件 NG'
+          done
+          osascript -l JavaScript tests/check_import.js
+          ! osascript -l JavaScript tests/check_receipt_ipc.js | grep -q '^NG'

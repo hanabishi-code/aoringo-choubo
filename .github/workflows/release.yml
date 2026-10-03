@@ -1,0 +1,76 @@
+# 配布用のビルド。タグ(例: v0.1.0)を push したときだけ動く。
+# - Apple シリコンのランナー(macos-14)で、universal(Intel + Apple シリコン)の .app と .dmg を作る
+# - アプリ全体をアドホック署名(tauri.conf.json の signingIdentity "-")。Apple の署名・公証はしない
+# - テスト → ビルド → 署名・アーキテクチャの確認 → Apple シリコン上での起動確認 → SHA-256 → Release の「下書き」に添付
+#   (公開はリポジトリの持ち主が GitHub の画面で行う)
+# - シークレット・個人情報は使わない。外部のアクションは GitHub 公式の actions/checkout だけで、コミット SHA に固定
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # Release の下書きを作るため。それ以外の権限は持たない
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      # actions/checkout v7.0.1(GitHub が検証済みのコミット)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Rust のターゲットと Tauri CLI(手元と同じ版に固定)
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo install tauri-cli --version "=2.12.0" --locked
+
+      - name: テスト
+        run: |
+          (cd src-tauri && cargo test)
+          for t in check_calc check_tax check_partners check_accounts check_attach check_search check_history check_history_labels; do
+            out="$(osascript -l JavaScript "tests/$t.js")"
+            echo "$out" | tail -1
+            echo "$out" | tail -1 | grep -q '^0 件 NG'
+          done
+          osascript -l JavaScript tests/check_import.js
+          ! osascript -l JavaScript tests/check_receipt_ipc.js | grep -q '^NG'
+
+      - name: ビルド(universal、.app と .dmg)
+        working-directory: src-tauri
+        run: |
+          # GitHub Actions では CI=true のため .dmg の見た目の整形が省かれる。整形するため無視させる。
+          # 整形(Finder の AppleScript)が失敗したときは、整形なしで作り直す
+          if ! TAURI_BUNDLER_DMG_IGNORE_CI=true cargo tauri build --target universal-apple-darwin --bundles app,dmg; then
+            echo "::warning::.dmg の整形に失敗したため、整形なしで作り直します"
+            cargo tauri build --target universal-apple-darwin --bundles app,dmg
+          fi
+
+      - name: 署名・アーキテクチャの確認と、Apple シリコン上での起動確認
+        run: |
+          APP="$(ls -d src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app | head -1)"
+          BIN="$APP/Contents/MacOS/keiri-note"
+          lipo -info "$BIN" | tee /dev/stderr | grep -q 'x86_64 arm64'
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv "$APP" 2>&1 | grep -q 'Signature=adhoc'
+          # 起動して 20 秒後もプロセスが動いているか(データはランナーの空のフォルダに作られる)
+          "$BIN" & PID=$!
+          sleep 20
+          kill -0 "$PID"
+          echo "起動 OK"
+          kill "$PID"
+
+      - name: SHA-256
+        working-directory: src-tauri/target/universal-apple-darwin/release/bundle/dmg
+        run: shasum -a 256 *.dmg | tee SHA256SUMS.txt
+
+      - name: Release の下書きに添付
+        working-directory: src-tauri/target/universal-apple-darwin/release/bundle/dmg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" *.dmg SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --draft --title "$GITHUB_REF_NAME" \
+            --notes "Apple の署名・公証を受けていないアプリです。開き方は README の「インストール」をご覧ください。ダウンロードしたファイルの SHA-256 は SHA256SUMS.txt で確認できます。税務上の正確性は保証しません(README の免責事項)。"
