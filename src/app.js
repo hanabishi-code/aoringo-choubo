@@ -522,11 +522,15 @@ const Store = {
 /* ============================== 画像(領収書)処理 ============================== */
 // 画像は receipts/ にファイルとして保存し、表示時に読み出して blob: URL にする
 const receiptUrls = {};
-function imageMime(u8) {
+// 添付ファイルの形式は中身で判定する(JPEG / PNG / HEIC / PDF)。Rust 側の image_ext と同じ判定
+function fileMime(u8) {
   if (u8.length >= 3 && u8[0] === 0xFF && u8[1] === 0xD8 && u8[2] === 0xFF) return 'image/jpeg';
   if (u8.length >= 8 && u8[0] === 0x89 && u8[1] === 0x50 && u8[2] === 0x4E && u8[3] === 0x47 && u8[4] === 0x0D && u8[5] === 0x0A && u8[6] === 0x1A && u8[7] === 0x0A) return 'image/png';
+  if (u8.length >= 5 && u8[0] === 0x25 && u8[1] === 0x50 && u8[2] === 0x44 && u8[3] === 0x46 && u8[4] === 0x2D) return 'application/pdf';
+  if (u8.length >= 12 && String.fromCharCode(u8[4], u8[5], u8[6], u8[7]) === 'ftyp' && ['heic', 'heix', 'heim', 'heis', 'mif1', 'msf1'].indexOf(String.fromCharCode(u8[8], u8[9], u8[10], u8[11])) >= 0) return 'image/heic';
   return null;
 }
+const imageMime = fileMime;
 async function readReceiptBytes(id) { return new Uint8Array(await invoke('read_receipt', { id: id })); }
 async function receiptUrl(id) {
   if (receiptUrls[id]) return receiptUrls[id];
@@ -536,19 +540,64 @@ async function receiptUrl(id) {
 }
 // 画像を保存し、Rust 側で作った画像 ID を返す
 function saveReceiptBytes(bytes) { return invoke('save_receipt', bytes); }
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+// 添付ファイルの一覧(取引・請求書の attachments: [{ id, type, name, addedAt }])。ファイルは receipts/ に原本のまま保存し、
+// 外しても消さない(訂正・削除の防止のため。外したことは変更履歴に残る)
+function attachmentTileHtml(a) {
+  const isImg = a.type && a.type.indexOf('image/') === 0;
+  return '<div class="tx-thumb" data-receipt-open="' + esc(a.id) + '" title="' + esc(a.name || '') + '">' +
+    (isImg ? '<img data-receipt="' + esc(a.id) + '" alt="">' : '<span style="display:flex;align-items:center;justify-content:center;height:100%;font-size:11px;font-weight:700;color:var(--ink-muted);">PDF</span>') + '</div>';
+}
+function attachWidgetHtml(key, list) {
+  return '<div class="attach-widget" data-attach-key="' + key + '">' + attachListHtml(list) +
+    '<input type="file" multiple accept="image/jpeg,image/png,image/heic,application/pdf,.heic,.pdf" data-attach-input style="margin-top:6px;">' +
+    '<div class="note" style="margin-top:6px;">JPEG・PNG・HEIC・PDF(1ファイル 20MB まで)を、原本のまま保存します。外しても、ファイル自体は消さずに残します。<br>' +
+    '写真には撮影場所(位置情報)などが含まれることがあります。書き出したバックアップにも含まれるので、人に渡すときは注意してください。</div></div>';
+}
+function attachListHtml(list) {
+  if (!list || !list.length) return '<div class="attach-list muted" style="font-size:12px;">添付なし</div>';
+  return '<div class="attach-list" style="display:flex;flex-direction:column;gap:6px;">' + list.map(function (a, i) {
+    return '<div style="display:flex;align-items:center;gap:10px;">' + attachmentTileHtml(a) +
+      '<div style="flex:1;font-size:12px;word-break:break-all;">' + esc(a.name || a.id) + '</div>' +
+      '<a data-attach-open="' + esc(a.id) + '" style="font-size:12px;cursor:pointer;">開く</a>' +
+      '<a data-attach-remove="' + i + '" style="font-size:12px;cursor:pointer;color:var(--danger);">外す</a></div>';
+  }).join('') + '</div>';
+}
+// 添付の編集中の一覧(取引の入力画面 = 'tx'。請求書は invoiceDraft.attachments を直接使う)
+const formAttach = { tx: null, txOwner: null };
+function attachListFor(key) { return key === 'inv' ? (invoiceDraft.attachments = invoiceDraft.attachments || []) : formAttach.tx; }
+function bindAttachWidgets() {
+  document.querySelectorAll('.attach-widget').forEach(function (w) {
+    const key = w.dataset.attachKey;
+    const redraw = function () { w.querySelector('.attach-list').outerHTML = attachListHtml(attachListFor(key)); bindAttachWidgets(); hydrateReceipts(); };
+    w.querySelectorAll('[data-attach-open]').forEach(function (el) { el.onclick = function () { openAttachment(el.dataset.attachOpen); }; });
+    w.querySelectorAll('[data-attach-remove]').forEach(function (el) { el.onclick = function () { attachListFor(key).splice(Number(el.dataset.attachRemove), 1); redraw(); }; });
+    const input = w.querySelector('[data-attach-input]');
+    input.onchange = async function () {
+      const files = Array.from(input.files || []); input.value = '';
+      for (const f of files) {
+        try {
+          if (f.size > MAX_ATTACHMENT_BYTES) throw new Error('20MB を超えています');
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          const type = fileMime(bytes); if (!type) throw new Error('JPEG・PNG・HEIC・PDF 以外の形式です');
+          const id = await saveReceiptBytes(bytes);
+          attachListFor(key).push({ id: id, type: type, name: String(f.name || '').slice(0, 200), addedAt: new Date().toISOString() });
+        } catch (e) { toast('添付できませんでした(' + String(typeof e === 'string' ? e : (e && e.message) || '').slice(0, 80) + ')', 8000); }
+      }
+      redraw();
+    };
+  });
+}
+function openAttachment(id) { invoke('open_attachment', { id: id }).catch(function (e) { toast('開けませんでした(' + String(typeof e === 'string' ? e : (e && e.message) || '').slice(0, 80) + ')', 6000); }); }
 // 画面内の <img data-receipt> に画像を読み込む。見つからない画像は空欄のままにする
 function hydrateReceipts() {
   document.querySelectorAll('img[data-receipt]').forEach(function (img) {
     receiptUrl(img.dataset.receipt).then(function (u) { img.src = u; }).catch(function () { img.removeAttribute('data-receipt'); img.parentNode.title = '画像が見つかりません'; });
   });
+  // クリックすると「プレビュー」で開く(原本ではなく読み取り専用のコピー)
   document.querySelectorAll('[data-receipt-open]').forEach(function (el) {
-    el.style.cursor = 'zoom-in';
-    el.addEventListener('click', function (ev) {
-      ev.preventDefault(); ev.stopPropagation();
-      receiptUrl(el.dataset.receiptOpen).then(function (u) {
-        openModal('レシート・領収書', '<img src="' + esc(u) + '" alt="" style="max-width:100%;display:block;margin:0 auto;">');
-      }).catch(function () { toast('画像が見つかりません'); });
-    });
+    el.style.cursor = 'pointer';
+    el.onclick = function (ev) { ev.preventDefault(); ev.stopPropagation(); openAttachment(el.dataset.receiptOpen); };
   });
 }
 function bytesToBase64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
@@ -745,10 +794,7 @@ function viewEntry() {
         '<div class="field" id="account-field"></div>' +
         '<div class="field" id="fund-field-wrap"><label>資金</label><div class="radio-group" id="fund-group">' + fundRadio('cash', editing ? editing.fund : 'cash') + fundRadio('bank', editing ? editing.fund : 'cash') + '</div></div>' +
         '<div class="field"><label>取引先・メモ</label><input type="text" id="f-memo" value="' + esc(editing ? (editing.memo || '') : '') + '" placeholder="例:〇〇株式会社 / 交通費など"></div>' +
-        '<div class="field"><label>レシート・領収書の画像(任意)</label><input type="file" id="f-receipt" accept="image/jpeg,image/png,image/heic,image/*">' +
-          (editing && editing.receiptAssetId ? '<div style="display:flex;align-items:center;gap:10px;margin-top:8px;"><div class="tx-thumb" style="width:64px;height:64px;" data-receipt-open="' + esc(editing.receiptAssetId) + '"><img data-receipt="' + esc(editing.receiptAssetId) + '" alt=""></div>' +
-            '<label style="font-size:13px;"><input type="checkbox" id="f-receipt-remove"> この画像を外す</label></div>' : '') +
-        '</div>' +
+        '<div class="field"><label>添付ファイル(レシート・領収書・請求書など。任意)</label>' + attachWidgetHtml('tx', txFormAttachments(editing)) + '</div>' +
         '<div style="display:flex; gap:10px; margin-top:16px;"><button type="submit" class="btn block">' + (editing ? '更新する' : '記録する') + '</button>' +
           (editing ? '<button type="button" id="cancel-edit" class="btn secondary">キャンセル</button>' : '') +
         '</div>' +
@@ -759,12 +805,18 @@ function viewEntry() {
     '</section>'
   );
 }
+// 入力画面の添付一覧は、編集する取引が変わったときだけ作り直す(描き直しで未保存の添付を失わない)
+function txFormAttachments(editing) {
+  const owner = editing ? editing.id : 'new';
+  if (formAttach.txOwner !== owner || !formAttach.tx) { formAttach.txOwner = owner; formAttach.tx = (editing && editing.attachments || []).map(function (a) { return Object.assign({}, a); }); }
+  return formAttach.tx;
+}
 function txRowHtml(t) {
   const label = primaryLabel(t); const sign = txSign(t); const cls = sign === '+' ? 'income' : 'expense';
   return (
-    '<div class="tx-row">' + (t.receiptAssetId ? '<div class="tx-thumb" data-receipt-open="' + esc(t.receiptAssetId) + '"><img data-receipt="' + esc(t.receiptAssetId) + '" alt=""></div>' : '<div class="tx-thumb"></div>') +
+    '<div class="tx-row">' + (t.attachments && t.attachments.length ? attachmentTileHtml(t.attachments[0]) : '<div class="tx-thumb"></div>') +
       '<div class="tx-main"><div class="tx-top"><span class="tx-cat">' + esc(label) + '</span><span class="tx-amt num ' + cls + '">' + sign + yen(t.amount) + '</span></div>' +
-      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + (t.linkedAssetId && t.kind === 'contribution' ? '<span class="tag">固定資産の売却</span> ' : '') + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
+      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + (t.linkedAssetId && t.kind === 'contribution' ? '<span class="tag">固定資産の売却</span> ' : '') + (t.attachments && t.attachments.length > 1 ? '<span class="tag">添付 ' + t.attachments.length + '</span> ' : '') + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
       '<div class="tx-actions"><a data-edit-tx=\"' + esc(t.id) + '\">編集</a><a data-del-tx=\"' + esc(t.id) + '\" style="color:var(--danger);">削除</a></div></div></div>'
   );
 }
@@ -1065,6 +1117,7 @@ function viewInvoiceForm() {
       '</div>' +
       '<div class="field" style="max-width:160px;"><label>消費税率</label><select id="inv-tax">' + [0, 8, 10].map(function (r) { return '<option value="' + r + '" ' + (r === Number(d.taxRate) ? 'selected' : '') + '>' + (r === 0 ? '対象外' : r + '%') + '</option>'; }).join('') + '</select></div>' +
       '<div class="field"><label>備考</label><textarea id="inv-notes">' + esc(d.notes) + '</textarea></div>' +
+      '<div class="field"><label>添付ファイル(送った請求書の控え PDF など。任意)</label>' + attachWidgetHtml('inv', d.attachments || []) + '</div>' +
       '<div class="kpi-row"><div class="kpi"><div class="lbl">小計</div><div class="val num" id="inv-subtotal">' + yen(t.subtotal) + '</div></div>' +
       '<div class="kpi"><div class="lbl">消費税</div><div class="val num" id="inv-taxval">' + yen(t.tax) + '</div></div>' +
       '<div class="kpi"><div class="lbl accent">合計</div><div class="val num accent" id="inv-total">' + money(t.total) + '</div></div></div>' +
@@ -1181,6 +1234,7 @@ function viewSettings() {
 function bindViewEvents() {
   hydrateReceipts();
   bindSearchBars();
+  bindAttachWidgets();
   const txForm = document.getElementById('tx-form');
   if (txForm) {
     const editing = editingTxId ? state.transactions.find(function (t) { return t.id === editingTxId; }) : null;
@@ -1270,26 +1324,10 @@ async function onSubmitTx(e) {
   if (kind === 'expense_accrued') { const combo = val('f-accrual-account'); const parts = combo.split(':'); payload.accountType = parts[0]; payload.account = parts[1]; payload.liability = val('f-liability'); }
   if (kind === 'pay_liability') payload.liability = val('f-liability');
 
-  const fileInput = document.getElementById('f-receipt');
-  let receiptAssetId = editingTxId ? (state.transactions.find(function (t) { return t.id === editingTxId; }) || {}).receiptAssetId : undefined;
-  const removeBox = document.getElementById('f-receipt-remove');
-  if (removeBox && removeBox.checked) receiptAssetId = ''; // 画像ファイル自体はバックアップから戻せるよう残す
-  if (fileInput && fileInput.files && fileInput.files[0]) {
-    try {
-      const blob = await compressImage(fileInput.files[0]);
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      try { receiptAssetId = await saveReceiptBytes(bytes); } catch (e) { throw stageError('save', typeof e === 'string' ? e : (e && e.message)); }
-    } catch (err) {
-      // 原因の種類だけを表示する(画像の中身やファイル名は出さない)
-      const label = { read: '読み込み失敗', decode: '画像として読めない形式', convert: '変換失敗', save: '保存失敗' }[err && err.stage] || '不明なエラー';
-      toast('画像を保存できませんでした(' + label + (err && err.message ? ' / ' + String(err.message).slice(0, 80) : '') + ')', 8000);
-      return;
-    }
-  }
-  if (receiptAssetId !== undefined) payload.receiptAssetId = receiptAssetId;
+  payload.attachments = (formAttach.tx || []).slice();
 
   if (editingTxId) { await Store.updateTransaction(editingTxId, payload); toast('更新しました'); } else { await Store.addTransaction(payload); toast('記録しました'); }
-  editingTxId = null; renderShell();
+  editingTxId = null; formAttach.tx = null; formAttach.txOwner = null; renderShell();
 }
 
 /* ============================== 印刷 ============================== */
@@ -1342,9 +1380,12 @@ function exportPLCsv() {
   lines.push(['差引金額(所得金額・控除前)', pl.net].map(csvField).join(','));
   downloadFile(y + '年_損益計算書.csv', '\uFEFF' + lines.join('\r\n'));
 }
+function allAttachmentIds(list) {
+  const ids = []; (list || []).forEach(function (x) { (x.attachments || []).forEach(function (a) { if (a && ID_RE.test(a.id)) ids.push(a.id); }); }); return ids;
+}
 async function exportBackup() {
-  const ids = Array.from(new Set(state.transactions.map(function (t) { return t.receiptAssetId; }).filter(function (id) { return id && ID_RE.test(id); })));
-  if (ids.length && !(await confirmDialog('バックアップにはレシート画像(' + ids.length + ' 枚)も含まれます。レシートには住所やカード番号の一部などが写っていることがあります。ファイルを持ち出す際は取り扱いに注意してください。', '書き出す'))) return;
+  const ids = Array.from(new Set(allAttachmentIds(state.transactions).concat(allAttachmentIds(state.invoices))));
+  if (ids.length && !(await confirmDialog('バックアップには添付ファイル(' + ids.length + ' 件)も含まれます。レシートには住所やカード番号の一部が、写真には撮影場所(位置情報)などが含まれていることがあります。ファイルを持ち出す・人に渡す際は取り扱いに注意してください。', '書き出す'))) return;
   const receipts = {}; let missing = 0;
   for (const id of ids) { try { receipts[id] = bytesToBase64(await readReceiptBytes(id)); } catch (e) { missing++; } }
   const data = { app: 'keiri-note', schemaVersion: SCHEMA_VERSION, transactions: state.transactions, invoices: state.invoices, settings: state.settings, fixedAssets: state.fixedAssets, inventoryYearEnd: state.inventoryYearEnd, receipts: receipts, exportedAt: new Date().toISOString() };
@@ -1353,8 +1394,8 @@ async function exportBackup() {
   if (ok && missing) toast('見つからない画像が ' + missing + ' 枚ありました(それ以外は書き出しました)');
 }
 /* ============================== バックアップの検証 ============================== */
-const SCHEMA_VERSION = 4;
-const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+const SCHEMA_VERSION = 5;
+const MAX_RECEIPT_BYTES = 20 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+\/]*={0,2}$/;
 // 旧版のデータを現在の形式に移行する。版ごとに1段ずつ上げる
 function migrateBackup(raw) {
@@ -1379,6 +1420,16 @@ function migrateBackup(raw) {
     // 既存の固定資産は支払いが記録されていないため、payFund なしのまま(画面で設定できる)
     v = 4;
   }
+  if (v < 5) {
+    // v4 → v5: 添付は1件(receiptAssetId)から複数(attachments: [{ id, type, name, addedAt }])に。PDF・HEIC も添付できるように
+    if (Array.isArray(out.transactions)) out.transactions = out.transactions.map(function (t) {
+      if (!t || typeof t !== 'object' || t.receiptAssetId === undefined) return t;
+      const o = Object.assign({}, t); const rid = o.receiptAssetId; delete o.receiptAssetId;
+      if (typeof rid === 'string' && rid) o.attachments = [{ id: rid }];
+      return o;
+    });
+    v = 5;
+  }
   out.schemaVersion = v;
   return out;
 }
@@ -1390,7 +1441,7 @@ function cleanReceipts(obj) {
     const v = obj[id];
     if (!ID_RE.test(id) || BAD_KEYS.indexOf(id) >= 0 || typeof v !== 'string' || v.length > Math.ceil(MAX_RECEIPT_BYTES / 3) * 4 || v.length % 4 !== 0 || !B64_RE.test(v)) { dropped++; return; }
     let bytes; try { bytes = base64ToBytes(v); } catch (e) { dropped++; return; }
-    if (!imageMime(bytes)) { dropped++; return; }
+    if (!fileMime(bytes)) { dropped++; return; }
     out[id] = bytes;
   });
   return { receipts: out, dropped: dropped };
@@ -1428,7 +1479,21 @@ function sanitizeBackup(raw) {
   out.transactions = cleanRecords(raw.transactions, function (t) { return Object.prototype.hasOwnProperty.call(KIND_LABELS, t.kind); });
   // 画像 ID の形式が不正なら、取引は残して画像の参照だけ外す
   if (out.transactions) out.transactions.forEach(function (t) { if (t.linkedAssetId !== undefined && !(typeof t.linkedAssetId === 'string' && ID_RE.test(t.linkedAssetId))) delete t.linkedAssetId; });
-  if (out.transactions) out.transactions.forEach(function (t) { if (t.receiptAssetId !== undefined && !(typeof t.receiptAssetId === 'string' && (t.receiptAssetId === '' || ID_RE.test(t.receiptAssetId)))) delete t.receiptAssetId; });
+  // 添付ファイルの一覧: ID の形式・形式名・ファイル名の長さを確かめ、不正なものは外す(取引・請求書は残す)
+  const ATTACH_TYPES = ['image/jpeg', 'image/png', 'image/heic', 'application/pdf'];
+  function cleanAttachments(x) {
+    if (x.receiptAssetId !== undefined) delete x.receiptAssetId; // v4 以前の項目(移行で attachments に移したあとの残り)
+    if (x.attachments === undefined) return;
+    if (!Array.isArray(x.attachments)) { delete x.attachments; return; }
+    x.attachments = x.attachments.slice(0, 50).filter(function (a) { return a && typeof a === 'object' && typeof a.id === 'string' && ID_RE.test(a.id); }).map(function (a) {
+      const o = { id: a.id };
+      if (ATTACH_TYPES.indexOf(a.type) >= 0) o.type = a.type;
+      if (typeof a.name === 'string') o.name = a.name.slice(0, 200);
+      if (typeof a.addedAt === 'string') o.addedAt = a.addedAt.slice(0, 40);
+      return o;
+    });
+  }
+  (out.transactions || []).forEach(cleanAttachments); (out.invoices || []).forEach(cleanAttachments);
   const rc = cleanReceipts(raw.receipts);
   out.receipts = rc.receipts; out.droppedReceipts = rc.dropped;
   out.invoices = cleanRecords(raw.invoices);
@@ -1468,23 +1533,28 @@ function onImportBackup(e) {
       const len = function (a) { return Array.isArray(a) ? a.length : 0; };
       const sum = function (a) { return (a || []).reduce(function (t, x) { return t + (Number(x.amount) || 0); }, 0); };
       const dropped = (rawLen(raw.transactions) - len(data.transactions)) + (rawLen(raw.invoices) - len(data.invoices)) + (rawLen(raw.fixedAssets) - len(data.fixedAssets));
-      const msg = 'ファイルの内容: 取引 ' + len(data.transactions) + ' 件(金額合計 ' + yen(sum(data.transactions)) + ')・請求書 ' + len(data.invoices) + ' 件・固定資産 ' + len(data.fixedAssets) + ' 件・レシート画像 ' + Object.keys(data.receipts).length + ' 枚' +
+      const msg = 'ファイルの内容: 取引 ' + len(data.transactions) + ' 件(金額合計 ' + yen(sum(data.transactions)) + ')・請求書 ' + len(data.invoices) + ' 件・固定資産 ' + len(data.fixedAssets) + ' 件・添付ファイル ' + Object.keys(data.receipts).length + ' 件' +
         (dropped > 0 ? '。形式が正しくない ' + dropped + ' 件は取り込みません' : '') +
-        (data.droppedReceipts > 0 ? '。不正な画像 ' + data.droppedReceipts + ' 枚は取り込みません' : '') +
+        (data.droppedReceipts > 0 ? '。不正な添付ファイル ' + data.droppedReceipts + ' 件は取り込みません' : '') +
         (assetsWithInvalidLife(data.fixedAssets).length ? '。耐用年数が範囲外の固定資産 ' + assetsWithInvalidLife(data.fixedAssets).length + ' 件は、取り込み後に修正してください' : '') + '。現在のデータと統合します(同じ ID のものは取り込みません)。現在のデータは取り込み前に退避されます。よろしいですか?';
       if (!(await confirmDialog(msg, '取り込む'))) return;
       await saveChain; // 保存待ちの変更を書き終えてから退避する
       await invoke('backup_before_import');
-      // 新しく追加する取引の画像だけを保存し、Rust 側で振られた新しい画像 ID に付け替える
-      // (同じバックアップを再度取り込んでも、取引が重複スキップされるので画像も増えない)
-      let savedReceipts = 0;
-      const curTxIds = new Set(state.transactions.map(function (x) { return x.id; }));
-      const newIdOf = {};
-      for (const t of (data.transactions || [])) {
-        const old = t.receiptAssetId;
-        if (curTxIds.has(t.id) || !old || !data.receipts[old]) continue;
-        if (!newIdOf[old]) { try { newIdOf[old] = await saveReceiptBytes(data.receipts[old]); savedReceipts++; } catch (e) { continue; } }
-        t.receiptAssetId = newIdOf[old];
+      // 新しく追加する取引・請求書の添付ファイルだけを保存し、Rust 側で振られた新しい ID に付け替える
+      // (同じバックアップを再度取り込んでも、取引・請求書が重複スキップされるのでファイルも増えない)
+      let savedReceipts = 0; const newIdOf = {};
+      for (const key of ['transactions', 'invoices']) {
+        const curIds = new Set(state[key].map(function (x) { return x.id; }));
+        for (const x of (data[key] || [])) {
+          if (curIds.has(x.id) || !x.attachments) continue;
+          const kept = [];
+          for (const att of x.attachments) {
+            if (!data.receipts[att.id]) { kept.push(att); continue; } // ファイルが同梱されていない添付は ID のまま(画面では「見つかりません」)
+            if (!newIdOf[att.id]) { try { newIdOf[att.id] = await saveReceiptBytes(data.receipts[att.id]); savedReceipts++; } catch (e) { kept.push(att); continue; } }
+            kept.push(Object.assign({}, att, { id: newIdOf[att.id], type: att.type || fileMime(data.receipts[att.id]) || undefined }));
+          }
+          x.attachments = kept;
+        }
       }
       // 既存と同じ ID のものは取り込まない(統合)
       const added = { transactions: [], invoices: [], fixedAssets: [] };
@@ -1498,7 +1568,7 @@ function onImportBackup(e) {
       }, 'import');
       renderShell();
       const skipped = len(data.transactions) - added.transactions.length;
-      openModal('取り込み結果', '<p style="line-height:1.8;">取引 ' + added.transactions.length + ' 件(金額合計 ' + yen(sum(added.transactions)) + ')<br>請求書 ' + added.invoices.length + ' 件<br>固定資産 ' + added.fixedAssets.length + ' 件' + (assetsWithInvalidLife(added.fixedAssets).length ? '(うち耐用年数が範囲外 ' + assetsWithInvalidLife(added.fixedAssets).length + ' 件。資産・負債タブで修正してください)' : '') + '<br>レシート画像 ' + savedReceipts + ' 枚<br>を取り込みました。' +
+      openModal('取り込み結果', '<p style="line-height:1.8;">取引 ' + added.transactions.length + ' 件(金額合計 ' + yen(sum(added.transactions)) + ')<br>請求書 ' + added.invoices.length + ' 件<br>固定資産 ' + added.fixedAssets.length + ' 件' + (assetsWithInvalidLife(added.fixedAssets).length ? '(うち耐用年数が範囲外 ' + assetsWithInvalidLife(added.fixedAssets).length + ' 件。資産・負債タブで修正してください)' : '') + '<br>添付ファイル ' + savedReceipts + ' 件<br>を取り込みました。' +
         (skipped > 0 ? '<br>取引 ' + skipped + ' 件はすでにあるため取り込んでいません。' : '') + '</p>' +
         '<p class="muted" style="margin-top:10px;">取り込み後の取引は合計 ' + state.transactions.length + ' 件(金額合計 ' + yen(sum(state.transactions)) + ')です。</p>');
     } catch (err) { toast(err && err.userMessage ? err.userMessage : '取り込みに失敗しました。ファイルを確認してください'); }
@@ -1511,7 +1581,7 @@ const HISTORY_TARGETS = { transaction: '取引', invoice: '請求書', fixedAsse
 const HISTORY_FIELD_LABELS = { kind: '種類', date: '日付', amount: '金額', memo: 'メモ', fund: '入出金', account: '勘定科目', liability: '負債科目', accountType: '科目区分',
   number: '請求書番号', issueDate: '発行日', dueDate: '支払期限', clientName: '取引先', clientAddress: '取引先住所', items: '明細', taxRate: '税率', notes: '備考', status: '状態',
   name: '名称', acquisitionDate: '取得日', cost: '取得価額', usefulLifeYears: '耐用年数', disposalDate: '除却日', opening: '期首棚卸高', closing: '期末棚卸高',
-  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', payFund: '支払い方法', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', receiptAssetId: 'レシート画像' };
+  businessName: '屋号', ownerName: '氏名', address: '住所', phone: '電話番号', invoiceRegNo: '登録番号', bankInfo: '振込先', openingCash: '開始時の現金', openingBank: '開始時の預金', openingDate: '開始日', invoiceSeq: '請求書連番', payFund: '支払い方法', disposalType: '処分の種類', saleAmount: '売却代金', saleFund: '受け取り先', theme: '表示テーマ', depreciationRounding: '減価償却の端数処理', receiptAssetId: 'レシート画像', attachments: '添付ファイル' };
 function historySummary(e) {
   const d = e.after || e.before || {};
   if (e.target === 'transaction') return (d.date || '') + ' ' + (KIND_LABELS[d.kind] || '') + ' ' + yen(d.amount) + (d.memo ? ' ' + d.memo : '');

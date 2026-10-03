@@ -14,7 +14,9 @@ const PRE_MIGRATE_SUFFIX: &str = "-pre-migrate";
 const BUNDLED_HISTORY_KEY: &str = "_historyJsonl";
 const HISTORY_FILE: &str = "history.jsonl";
 const RECEIPTS_DIR: &str = "receipts";
-const MAX_RECEIPT_BYTES: usize = 10 * 1024 * 1024;
+// 添付ファイル(レシート・領収書・請求書の画像や PDF)。原本のまま保存するため上限は大きめ
+const MAX_RECEIPT_BYTES: usize = 20 * 1024 * 1024;
+const VIEW_DIR_NAME: &str = "青りんご帳簿-view";
 const MAX_HISTORY_ENTRY_BYTES: usize = 1024 * 1024;
 const MAX_DATA_BYTES: usize = 200 * 1024 * 1024;
 
@@ -368,16 +370,24 @@ fn valid_receipt_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-/// 先頭のバイト列で JPEG / PNG を判定し、拡張子を返す
+/// 先頭のバイト列(ファイルの中身)で形式を判定し、拡張子を返す。JPEG / PNG / HEIC / PDF のみ
 fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some("jpg")
     } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
         Some("png")
+    } else if bytes.starts_with(b"%PDF-") {
+        Some("pdf")
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && matches!(&bytes[8..12], b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1")
+    {
+        Some("heic")
     } else {
         None
     }
 }
+const ATTACHMENT_EXTS: [&str; 4] = ["jpg", "png", "heic", "pdf"];
 
 /// 新しい画像 ID を作る(時刻 + 連番。英数字と _ のみ)
 fn new_receipt_id() -> String {
@@ -395,7 +405,7 @@ fn save_receipt_in(dir: &Path, bytes: &[u8]) -> Result<String, String> {
     if bytes.len() > MAX_RECEIPT_BYTES {
         return Err("画像が大きすぎます".into());
     }
-    let ext = image_ext(bytes).ok_or("JPEG / PNG 以外の画像は保存できません")?;
+    let ext = image_ext(bytes).ok_or("JPEG / PNG / HEIC / PDF 以外のファイルは添付できません")?;
     let rdir = dir.join(RECEIPTS_DIR);
     fs::create_dir_all(&rdir).map_err(|e| e.to_string())?;
     let mut id = new_receipt_id();
@@ -407,7 +417,7 @@ fn save_receipt_in(dir: &Path, bytes: &[u8]) -> Result<String, String> {
 }
 
 fn find_receipt(rdir: &Path, id: &str) -> Option<PathBuf> {
-    ["jpg", "png"]
+    ATTACHMENT_EXTS
         .iter()
         .map(|ext| rdir.join(format!("{}.{}", id, ext)))
         .find(|p| p.exists())
@@ -455,6 +465,54 @@ fn read_receipt(app: tauri::AppHandle, id: String) -> Result<tauri::ipc::Respons
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// 添付ファイルを「プレビュー」で開く。原本は開かず、一時フォルダに読み取り専用のコピーを作って開く
+/// (プレビューで編集・保存しても原本は変わらない)。一時フォルダは起動時と終了時に消す
+#[tauri::command]
+fn open_attachment(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    if !valid_receipt_id(&id) {
+        return Err("添付ファイルの ID が不正です".into());
+    }
+    let src = find_receipt(&data_dir(&app)?.join(RECEIPTS_DIR), &id).ok_or("添付ファイルが見つかりません")?;
+    let vdir = std::env::temp_dir().join(VIEW_DIR_NAME);
+    fs::create_dir_all(&vdir).map_err(|e| e.to_string())?;
+    let dst = vdir.join(src.file_name().ok_or("ファイル名が不正です")?);
+    if dst.exists() {
+        // 前回のコピーは読み取り専用なので、書き込めるようにしてから置き換える
+        let mut perm = fs::metadata(&dst).map_err(|e| e.to_string())?.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        let _ = fs::set_permissions(&dst, perm);
+        let _ = fs::remove_file(&dst);
+    }
+    fs::copy(&src, &dst).map_err(|e| e.to_string())?;
+    let mut perm = fs::metadata(&dst).map_err(|e| e.to_string())?.permissions();
+    perm.set_readonly(true);
+    fs::set_permissions(&dst, perm).map_err(|e| e.to_string())?;
+    std::process::Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg("Preview")
+        .arg(&dst)
+        .status()
+        .map_err(|e| e.to_string())
+        .and_then(|st| if st.success() { Ok(()) } else { Err("プレビューで開けませんでした".into()) })
+}
+
+/// 表示用の一時コピーを消す(読み取り専用のファイルも消せる)
+fn clean_view_dir() {
+    let vdir = std::env::temp_dir().join(VIEW_DIR_NAME);
+    if let Ok(rd) = fs::read_dir(&vdir) {
+        for e in rd.flatten() {
+            if let Ok(meta) = e.metadata() {
+                let mut perm = meta.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                perm.set_readonly(false);
+                let _ = fs::set_permissions(e.path(), perm);
+            }
+        }
+    }
+    let _ = fs::remove_dir_all(&vdir);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -472,6 +530,7 @@ pub fn run() {
             wipe_all,
             save_receipt,
             read_receipt,
+            open_attachment,
             selftest_report,
             read_history
         ])
@@ -498,6 +557,7 @@ pub fn run() {
                     let _ = w.hide();
                 }
             }
+            clean_view_dir();
             if let Err(e) = auto_backup(app.handle()) {
                 eprintln!("起動時のバックアップに失敗: {}", e);
             }
@@ -507,6 +567,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                clean_view_dir();
                 if let Err(e) = auto_backup(app) {
                     eprintln!("終了時のバックアップに失敗: {}", e);
                 }
@@ -606,6 +667,14 @@ mod tests {
         assert!(valid_receipt_id(&id1));
         assert_eq!(fs::read(dir.join(format!("receipts/{}.jpg", id1))).unwrap(), jpg);
         assert!(save_receipt_in(&dir, b"<svg>").is_err());
+        // PDF・HEIC は中身で判定して原本のまま保存する
+        let pdf = b"%PDF-1.7\n%test";
+        let pid = save_receipt_in(&dir, pdf).unwrap();
+        assert_eq!(fs::read(dir.join(format!("receipts/{}.pdf", pid))).unwrap(), pdf);
+        let heic = [0, 0, 0, 0x18, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 1, 2];
+        let hid = save_receipt_in(&dir, &heic).unwrap();
+        assert!(dir.join(format!("receipts/{}.heic", hid)).exists());
+        assert!(save_receipt_in(&dir, b"PDF-1.7 not really").is_err());
         assert!(save_receipt_in(&dir, &vec![0xFF; MAX_RECEIPT_BYTES + 1]).is_err());
         assert!(!valid_receipt_id("../evil"));
         fs::remove_dir_all(&dir).unwrap();

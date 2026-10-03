@@ -114,7 +114,7 @@ var bad = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 3,
 var c = bad.fixedAssets[0];
 check('取り込み: 不正な処分の種類は除却に/不正な受け取り先は外す/売却代金は数値に', [c.disposalType, c.saleFund === undefined, c.saleAmount], ['retire', true, 0]);
 check('取り込み: 不正な linkedAssetId は外す', bad.transactions[0].linkedAssetId === undefined, true);
-check('SCHEMA_VERSION は 4', app.SCHEMA_VERSION, 4);
+check('SCHEMA_VERSION は 4 以上(版数のテストは tests/check_attach.js)', app.SCHEMA_VERSION >= 4, true);
 
 /* ---------- 4. 損益計算書 ---------- */
 reset({ openingCash: 100000, openingBank: 500000, openingDate: '2025-01-01' });

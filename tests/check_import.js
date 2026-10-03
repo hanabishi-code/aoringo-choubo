@@ -15,7 +15,7 @@ files.forEach(function(f){
     var n=function(a){return Array.isArray(a)?a.length:0}; var sum=(d.transactions||[]).reduce(function(t,x){return t+(Number(x.amount)||0)},0);
     var dropped=(n(raw.transactions)-n(d.transactions))+(n(raw.invoices)-n(d.invoices))+(n(raw.fixedAssets)-n(d.fixedAssets));
     var proto=(d.transactions||[]).some(function(t){return Object.prototype.hasOwnProperty.call(t,'__proto__')})||({}).polluted;
-    out.push(f+': 取引'+n(d.transactions)+'件 合計'+sum+' 請求書'+n(d.invoices)+' 固定資産'+n(d.fixedAssets)+' 除外'+dropped+(d.settings?' 設定キー='+Object.keys(d.settings).join(','):'')+(proto?' ★proto残存':'')+' 画像'+Object.keys(d.receipts).length+'枚(不正'+d.droppedReceipts+') 画像参照='+(d.transactions||[]).map(function(t){return t.receiptAssetId===undefined?'-':t.receiptAssetId}).filter(function(x){return x!=='-'}).join('/'));
+    out.push(f+': 取引'+n(d.transactions)+'件 合計'+sum+' 請求書'+n(d.invoices)+' 固定資産'+n(d.fixedAssets)+' 除外'+dropped+(d.settings?' 設定キー='+Object.keys(d.settings).join(','):'')+(proto?' ★proto残存':'')+' 添付'+Object.keys(d.receipts).length+'件(不正'+d.droppedReceipts+') 添付参照='+(d.transactions||[]).map(function(t){return (t.attachments||[]).map(function(a){return a.id}).join('+')}).filter(Boolean).join('/'));
   }catch(e){ out.push(f+': エラー → '+(e.userMessage||('JSON解析失敗 ('+e.name+')'))); }
 });
 out.join('\n');
