@@ -41,6 +41,6 @@ check('取り込み: 不明な形式名は外し、ファイル名は 200 文字
 check('取り込み: v5 に残った古い receiptAssetId は消す', v5.transactions[0].receiptAssetId, undefined);
 check('請求書の添付(送った請求書の控え)も残る', v5.invoices[0].attachments, [{ id: 'rc_inv', type: 'application/pdf', name: '控え.pdf' }]);
 check('書き出す添付 ID: 取引と請求書の両方から集める', app.allAttachmentIds(v5.transactions).concat(app.allAttachmentIds(v5.invoices)), ['rc_ok', 'rc_t', 'rc_long', 'rc_inv']);
-check('SCHEMA_VERSION は 5', app.SCHEMA_VERSION, 5);
+check('SCHEMA_VERSION は 5 以上(最新の版数は tests/check_tax.js)', app.SCHEMA_VERSION >= 5, true);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';

@@ -5,7 +5,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, computeConsumptionTax: computeConsumptionTax };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, computeConsumptionTax: computeConsumptionTax, sanitizeBackup: sanitizeBackup, invoiceTotals: invoiceTotals, invoiceMissing: invoiceMissing, SCHEMA_VERSION: SCHEMA_VERSION };'))(document, window, localStorage);
 
 var results = [];
 function check(name, actual, expected) {
@@ -93,5 +93,35 @@ reset({ taxMethod: 'simplified', mainBusinessType: 1 }); sale('2026-12-31', 9999
 var r10 = app.computeConsumptionTax(2026);
 // 9,999,999,999 × 100/110 = 9,090,909,090 → 9,090,909,000 × 7.8% = 709,090,902 × 90% = 638,181,811 → 差引 70,909,091 → 70,909,000
 check('大きな金額: 課税標準・税額・控除・差引', [r10.base, r10.tax, r10.deduction, r10.net], [9090909000, 709090902, 638181811, 70909000]);
+
+/* 10. データ形式の移行(v5 → v6)と取り込みの検証 */
+var m = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 5, settings: { businessName: 'x' },
+  transactions: [{ id: 'tx_s', kind: 'income', date: '2026-01-01', amount: 1100, fund: 'bank', account: 'sales' },
+                 { id: 'tx_e', kind: 'expense', date: '2026-01-02', amount: 500, fund: 'cash', account: 'supplies' }],
+  invoices: [{ id: 'inv_a', number: '1', taxRate: 8, items: [{ name: 'A', qty: 1, unitPrice: 1000 }] },
+             { id: 'inv_b', number: '2', taxRate: 0, items: [{ name: 'B', qty: 2, unitPrice: 500 }] }] });
+check('移行: 既存の売上は課税(標準税率)、経費は税区分なしのまま', m.transactions.map(function (t) { return t.taxCategory || '-'; }), ['standard', '-']);
+check('移行: 売上があれば見直しの案内を出す(課税方式・事業区分は未設定のまま)', [m.settings.taxReview, m.settings.taxMethod, m.settings.mainBusinessType], ['pending', undefined, undefined]);
+check('移行: 請求書の税率は明細ごとに(元の税率のまま)', m.invoices.map(function (i) { return [i.taxRate, i.items[0].taxRate]; }), [[undefined, 8], [undefined, 0]]);
+var bad = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 6, settings: { taxMethod: 'hack', mainBusinessType: 9, taxReview: 'x' },
+  transactions: [{ id: 'tx_x', kind: 'income', date: '2026-01-01', amount: 1, fund: 'bank', account: 'sales', taxCategory: 'evil', businessType: 7 }],
+  invoices: [{ id: 'inv_x', number: '1', items: [{ name: 'A', qty: 1, unitPrice: 1, taxRate: 5 }], transactionDate: 'x'.repeat(100) }],
+  taxInterim: { 2026: { national: -5, local: 'abc' }, 'xx': { national: 1 } } });
+check('取り込み: 不正な課税方式・事業区分・案内の値は取り込まない', [bad.settings.taxMethod, bad.settings.mainBusinessType, bad.settings.taxReview], [undefined, undefined, undefined]);
+check('取り込み: 不正な税区分・事業区分は外す', [bad.transactions[0].taxCategory, bad.transactions[0].businessType], [undefined, undefined]);
+check('取り込み: 請求書の不正な税率は 10%、取引年月日は 40 文字まで', [bad.invoices[0].items[0].taxRate, bad.invoices[0].transactionDate.length], [10, 40]);
+check('取り込み: 中間納付は年(4桁)ごと・0 以上の数値', bad.taxInterim, { 2026: { national: 0, local: 0 } });
+check('SCHEMA_VERSION は 6', app.SCHEMA_VERSION, 6);
+
+/* 11. 請求書: 税率ごとの合計(端数処理は1請求書・1税率につき1回、四捨五入) */
+var t = app.invoiceTotals({ items: [{ name: 'A', qty: 3, unitPrice: 333, taxRate: 10 }, { name: 'B', qty: 1, unitPrice: 1, taxRate: 10 }, { name: '食品', qty: 1, unitPrice: 1234, taxRate: 8 }] });
+// 10%: 999 + 1 = 1,000 → 100 / 8%: 1,234 × 8% = 98.72 → 99
+check('請求書: 税率ごとの対価・消費税と合計', [t.byRate, t.subtotal, t.tax, t.total], [[{ rate: 10, subtotal: 1000, tax: 100 }, { rate: 8, subtotal: 1234, tax: 99 }], 2234, 199, 2433]);
+var t2 = app.invoiceTotals({ items: [{ qty: 1, unitPrice: 105, taxRate: 10 }, { qty: 1, unitPrice: 104, taxRate: 10 }] });
+check('請求書: 明細ごとではなく税率ごとに1回だけ丸める(105+104=209 → 20.9 → 21)', t2.tax, 21);
+app.state.settings = Object.assign(app.defaultSettings(), { businessName: '屋号', invoiceRegNo: '' });
+check('請求書: 記載事項の不足(登録番号・宛先・取引年月日)', app.invoiceMissing({ clientName: '', transactionDate: '', items: [{ name: 'A' }] }), ['登録番号(設定)', '宛先', '取引年月日']);
+app.state.settings = Object.assign(app.defaultSettings(), { businessName: '屋号', invoiceRegNo: 'T1234567890123' });
+check('請求書: 記載事項がそろっていれば不足なし', app.invoiceMissing({ clientName: '株式会社テスト', transactionDate: '2026年9月分', items: [{ name: '作業' }] }), []);
 
 results.join('\n') + '\n\n' + results.filter(function (x) { return x.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';
