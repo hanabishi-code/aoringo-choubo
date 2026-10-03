@@ -84,4 +84,14 @@ s.partners = []; for (var k = 0; k < 10; k++) s.partners.push({ id: 'pt_' + k, n
 check('プルダウン: 10 件以上で絞り込み欄を出す', /picker-filter/.test(app.partnerPickerHtml('inv-client', 'pt_1', '')), true);
 check('プルダウン: 名前は HTML として解釈されない', /<img/.test((s.partners = [{ id: 'pt_x', name: '<img src=x onerror=alert(1)>' }], app.partnerPickerHtml('inv-client', 'pt_x', ''))), false);
 
+/* 8. 取引の入力画面の取引先(「(なし)」を選べる) */
+s.partners = [{ id: 'pt_b', name: 'いろは商店' }, { id: 'pt_a', name: 'あおば工房' }];
+var t1 = app.partnerPickerHtml('f-partner', null, '', true);
+check('入力画面: 先頭に「(なし)」、名前順、最後に「新しい取引先を入力」。取引先のない取引は「(なし)」が選ばれる',
+  [t1.match(/<option[^>]*>[^<]*/g).map(function (o) { return o.replace(/<option[^>]*>/, ''); }), /<option value="" selected>/.test(t1), /id="f-partner-new"[^>]* hidden/.test(t1)],
+  [['(なし)', 'あおば工房', 'いろは商店', '+ 新しい取引先を入力'], true, true]);
+var t2 = app.partnerPickerHtml('f-partner', 'pt_a', '', true);
+check('入力画面: 既存の取引の取引先は選ばれた状態', /value="pt_a" selected/.test(t2), true);
+check('請求書の宛先には「(なし)」は出ない', /\(なし\)/.test(app.partnerPickerHtml('inv-client', 'pt_a', '')), false);
+
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';

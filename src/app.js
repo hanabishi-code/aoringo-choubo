@@ -627,13 +627,15 @@ async function partnerIdForName(name, address) {
 // 取引先を選ぶプルダウン(▼)。取引先の一覧(名前順)+「新しい取引先を入力」。新しく入力するときだけ名前の入力欄を出す。
 // 取引先が 10 件以上あるときは、プルダウンの上に絞り込みの入力欄を出す
 const NEW_PARTNER = '__new';
-function partnerPickerHtml(prefix, currentId, currentName) {
+const NO_PARTNER = '';
+function partnerPickerHtml(prefix, currentId, currentName, allowNone) {
   const list = (state.partners || []).slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'ja'); });
-  const sel = currentId && findById(list, currentId) ? currentId : NEW_PARTNER;
+  // allowNone: 取引の入力では「(なし)」を選べる(取引先のない取引のため)。取引先も名前もなければ「(なし)」
+  const sel = currentId && findById(list, currentId) ? currentId : (allowNone && !currentName ? NO_PARTNER : NEW_PARTNER);
   const showNew = sel === NEW_PARTNER;
   return '<div class="partner-picker" data-picker="' + prefix + '">' +
     (list.length >= 10 ? '<input type="search" class="picker-filter" placeholder="取引先を絞り込む" style="margin-bottom:6px;">' : '') +
-    '<select id="' + prefix + '-sel">' + list.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') +
+    '<select id="' + prefix + '-sel">' + (allowNone ? '<option value=""' + (sel === NO_PARTNER ? ' selected' : '') + '>(なし)</option>' : '') + list.map(function (p) { return '<option value="' + esc(p.id) + '"' + (p.id === sel ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') +
       '<option value="' + NEW_PARTNER + '"' + (showNew ? ' selected' : '') + '>' + (list.length ? '+ 新しい取引先を入力' : '新しい取引先を入力') + '</option></select>' +
     '<input type="text" id="' + prefix + '-new" maxlength="100" value="' + esc(showNew ? (currentName || '') : '') + '" placeholder="新しい取引先の名前" style="margin-top:6px;"' + (showNew ? '' : ' hidden') + '>' +
   '</div>';
@@ -642,19 +644,19 @@ function partnerPickerHtml(prefix, currentId, currentName) {
 function pickerName(prefix) {
   const sel = document.getElementById(prefix + '-sel'); if (!sel) return '';
   if (sel.value === NEW_PARTNER) return (document.getElementById(prefix + '-new') || {}).value || '';
+  if (sel.value === NO_PARTNER) return '';
   return partnerName(sel.value);
 }
 function bindPartnerPicker(prefix, onPick) {
   const box = document.querySelector('[data-picker="' + prefix + '"]'); if (!box) return;
   const sel = document.getElementById(prefix + '-sel'), input = document.getElementById(prefix + '-new'), filter = box.querySelector('.picker-filter');
-  sel.addEventListener('change', function () { input.hidden = sel.value !== NEW_PARTNER; if (sel.value === NEW_PARTNER) input.focus(); if (onPick) onPick(sel.value === NEW_PARTNER ? null : findById(state.partners, sel.value)); });
+  sel.addEventListener('change', function () { input.hidden = sel.value !== NEW_PARTNER; if (sel.value === NEW_PARTNER) input.focus(); if (onPick) onPick((sel.value === NEW_PARTNER || sel.value === NO_PARTNER) ? null : findById(state.partners, sel.value)); });
   if (input && onPick) input.addEventListener('input', function () { onPick(null); });
   if (filter) filter.addEventListener('input', function () {
     const w = normalizeSearch(filter.value);
-    Array.from(sel.options).forEach(function (o) { o.hidden = o.value !== NEW_PARTNER && w && normalizeSearch(o.textContent).indexOf(w) < 0; });
+    Array.from(sel.options).forEach(function (o) { o.hidden = o.value !== NEW_PARTNER && o.value !== NO_PARTNER && w && normalizeSearch(o.textContent).indexOf(w) < 0; });
   });
 }
-function partnerDatalistHtml() { return '<datalist id="partner-list">' + (state.partners || []).map(function (p) { return '<option value="' + esc(p.name) + '">'; }).join('') + '</datalist>'; }
 
 const Store = {
   async loadAll() {
@@ -1115,7 +1117,7 @@ function viewEntry() {
         '</div>' +
         '<div class="field" id="account-field"></div>' +
         '<div class="field" id="fund-field-wrap"><label>資金(現金・口座)</label>' + fundPickerHtml('fund-group', editing ? editing.fund : 'cash') + '</div>' +
-        '<div class="field"><label>取引先(任意)</label><input type="text" id="f-partner" list="partner-list" maxlength="100" value="' + esc(editing ? partnerName(editing.partnerId) : '') + '" placeholder="例:〇〇株式会社(一度入れた取引先は候補に出ます)">' + partnerDatalistHtml() + '</div>' +
+        '<div class="field"><label>取引先(任意)</label>' + partnerPickerHtml('f-partner', editing ? editing.partnerId : null, '', true) + '</div>' +
         '<div class="field"><label>メモ</label><input type="text" id="f-memo" value="' + esc(editing ? (editing.memo || '') : '') + '" placeholder="例:交通費など"></div>' +
         '<div class="field"><label>添付ファイル(レシート・領収書・請求書など。任意)</label>' + attachWidgetHtml('tx', txFormAttachments(editing)) + '</div>' +
         '<div style="display:flex; gap:10px; margin-top:16px;"><button type="submit" class="btn block">' + (editing ? '更新する' : '記録する') + '</button>' +
@@ -1714,6 +1716,7 @@ function viewSettings() {
 function bindViewEvents() {
   hydrateReceipts();
   bindSearchBars();
+  bindPartnerPicker('f-partner');
   bindPartnerEvents();
   bindAttachWidgets();
   const txForm = document.getElementById('tx-form');
@@ -1849,7 +1852,7 @@ async function onSubmitTx(e) {
     payload.fund = fundPickerValue('fund-group') || 'cash';
   }
   if (kind === 'income' || kind === 'expense') payload.account = val('f-account');
-  const pid = await partnerIdForName(val('f-partner'));
+  const pid = await partnerIdForName(pickerName('f-partner'));
   payload.partnerId = pid || undefined;
   const taxcat = document.getElementById('f-taxcat');
   if (taxcat && taxcat.value) payload.taxCategory = taxcat.value; else payload.taxCategory = undefined;
