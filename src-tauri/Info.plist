@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Tauri が配布用の .app の Info.plist にマージし、開発ビルドでは実行ファイルに埋め込む。
+  アプリが日本語と英語に対応していることを macOS に伝え、印刷・保存・ファイル選択などのシステムのダイアログを
+  利用者の言語設定(日本語なら日本語、英語なら英語)で表示させる。どちらでもない言語の Mac では日本語にする。
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>ja</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>ja</string>
+		<string>en</string>
+	</array>
+	<key>CFBundleAllowMixedLocalizations</key>
+	<true/>
+</dict>
+</plist>
