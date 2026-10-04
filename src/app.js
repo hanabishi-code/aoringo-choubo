@@ -785,7 +785,7 @@ const Store = {
     const from = findById(state.partners, fromId), to = findById(state.partners, toId); if (!from || !to || fromId === toId) return;
     let n = 0;
     state.transactions = state.transactions.map(function (t) { if (t.partnerId !== fromId) return t; n++; return Object.assign({}, t, { partnerId: toId }); });
-    state.invoices = state.invoices.map(function (i) { if (i.partnerId !== fromId) return i; n++; return Object.assign({}, i, { partnerId: toId, clientName: to.name }); });
+    state.invoices = state.invoices.map(function (i) { if (i.partnerId !== fromId) return i; n++; return Object.assign({}, i, isDraftInvoice(i) ? { partnerId: toId, clientName: to.name } : { partnerId: toId }); });
     state.partners = state.partners.filter(function (p) { return p.id !== fromId; });
     await saveAndLog('merge', 'partner', from, to, '統合しました', { moved: n });
   },
@@ -1440,6 +1440,8 @@ function invoiceMissing(inv) {
 }
 const INVOICE_STATUSES = ['下書き', '送付済み(未入金)', '入金済み'];
 function isUnpaidInvoice(inv) { return inv.status === '送付済み(未入金)'; }
+// 下書きの請求書だけ、取引先の名前の変更・統合に合わせて宛先名を変える(送付済み・入金済みの宛先は発行したときのまま)
+function isDraftInvoice(inv) { return !inv.status || inv.status === '下書き'; }
 function invoiceRowHtml(inv) {
   const t = invoiceTotals(inv);
   return (
@@ -1561,7 +1563,7 @@ function viewPartners() {
     '</table></div></section>' +
     (detail ? '<section class="block"><h2>' + esc(sel === '-' ? '取引先が未設定の取引' : partnerName(sel) + 'の取引') + '(新しい順・' + detail.length + ' 件)</h2><a data-partner-sel="" style="cursor:pointer;font-size:12px;">閉じる</a>' +
       (detail.length ? detail.map(txRowHtml).join('') : '<div class="muted" style="padding:12px 0;">取引はありません</div>') + '</section>' : '') +
-    '<section class="block"><h2>取引先の一覧(' + list.length + ')</h2><div class="note">名前を変えると、その取引先を使っているすべての取引・請求書の表示が変わります。同じ相手が2つあるときは「統合」で1つにまとめられます。使われていない取引先だけ削除できます。</div>' +
+    '<section class="block"><h2>取引先の一覧(' + list.length + ')</h2><div class="note">名前を変えると、その取引先を使っている取引と下書きの請求書の表示が変わります(送付済み・入金済みの請求書の宛先は、発行したときのまま変わりません)。同じ相手が2つあるときは「統合」で1つにまとめられます。使われていない取引先だけ削除できます。</div>' +
     (list.length ? list.map(function (p) {
       const u = partnerUsage(p.id);
       return '<div class="tx-row" style="align-items:center;"><div style="flex:1;"><strong>' + esc(p.name) + '</strong><div class="muted" style="font-size:12px;">' + esc(p.address || '') + ' 取引 ' + u.transactions + ' 件・請求書 ' + u.invoices + ' 件</div></div>' +
@@ -1589,7 +1591,7 @@ function bindPartnerEvents() {
       const name = normName(val('pt-name')).slice(0, 100); if (!name) { toast('名前を入力してください'); return; }
       const other = findPartnerByName(name); if (other && other.id !== p.id) { toast('同じ名前の取引先があります。「統合」を使ってください', 6000); return; }
       // 請求書の宛先名もそろえてから保存する(取引先の変更と同じ保存で書き込まれる)
-      state.invoices = state.invoices.map(function (inv) { return inv.partnerId === p.id ? Object.assign({}, inv, { clientName: name }) : inv; });
+      state.invoices = state.invoices.map(function (inv) { return inv.partnerId === p.id && isDraftInvoice(inv) ? Object.assign({}, inv, { clientName: name }) : inv; });
       await Store.updatePartner(p.id, { name: name, address: val('pt-addr').slice(0, 200) || undefined });
       closeModal(); renderView();
     });

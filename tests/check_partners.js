@@ -94,4 +94,14 @@ var t2 = app.partnerPickerHtml('f-partner', 'pt_a', '', true);
 check('入力画面: 既存の取引の取引先は選ばれた状態', /value="pt_a" selected/.test(t2), true);
 check('請求書の宛先には「(なし)」は出ない', /\(なし\)/.test(app.partnerPickerHtml('inv-client', 'pt_a', '')), false);
 
+/* 9. 取引先の統合で、発行済みの請求書の宛先は変えない(下書きだけ変える) */
+s.partners = [{ id: 'pt_x', name: '旧社名' }, { id: 'pt_y', name: '新社名' }];
+s.transactions = [];
+s.invoices = [{ id: 'iv_d', number: '1', partnerId: 'pt_x', clientName: '旧社名', status: '下書き', items: [] },
+              { id: 'iv_s', number: '2', partnerId: 'pt_x', clientName: '旧社名', status: '送付済み(未入金)', items: [] },
+              { id: 'iv_p', number: '3', partnerId: 'pt_x', clientName: '旧社名', status: '入金済み', items: [] }];
+app.Store.mergePartner('pt_x', 'pt_y');
+check('統合: 取引先の付け替えはすべて、宛先名は下書きだけ新しい名前', s.invoices.map(function (i) { return [i.partnerId, i.clientName]; }),
+  [['pt_y', '新社名'], ['pt_y', '旧社名'], ['pt_y', '旧社名']]);
+
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';
