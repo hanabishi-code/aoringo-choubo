@@ -139,8 +139,10 @@
   .storage-dot.warn { background: var(--vermillion); }
 
   #print-area { display: none; }
+  @page { size: A4 portrait; margin: 14mm 14mm 12mm; }
   @media print {
     body * { visibility: hidden; }
     #print-area, #print-area * { visibility: visible; }
-    #print-area { display: block; position: absolute; top: 0; left: 0; width: 100%; padding: 24px; }
+    #print-area { display: block; position: absolute; top: 0; left: 0; width: 100%; padding: 0; background: #fff; }
+    #print-area * { -webkit-print-color-adjust: exact; print-color-adjust: exact; } /* 見出しの灰色を印刷する */
   }

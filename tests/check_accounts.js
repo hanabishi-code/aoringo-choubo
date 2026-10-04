@@ -29,7 +29,7 @@ var m = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 8, settings: { op
 check('移行: 最初の口座は「普通預金」(ID bank)、開始残高は設定から移す', m.bankAccounts, [{ id: 'bank', name: '普通預金', opening: 500000 }]);
 check('移行: 設定の預金の開始残高は 0 に(二重に数えない)、現金はそのまま', [m.settings.openingBank, m.settings.openingCash], [0, 3000]);
 check('移行: 以前の取引の資金 bank はそのまま', m.transactions[0].fund, 'bank');
-check('SCHEMA_VERSION は 9', app.SCHEMA_VERSION, 9);
+check('SCHEMA_VERSION は 9 以上(最新の版数は tests/check_invoice_print.js)', app.SCHEMA_VERSION >= 9, true);
 
 /* 2. 口座ごとの残高と貸借対照表 */
 reset([{ id: 'bank', name: 'A銀行', opening: 500000 }, { id: 'bk_2', name: 'B銀行', opening: 200000 }]);

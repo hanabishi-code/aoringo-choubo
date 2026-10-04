@@ -31,7 +31,7 @@ jobs:
       - name: テスト
         run: |
           (cd src-tauri && cargo test)
-          for t in check_calc check_tax check_partners check_accounts check_attach check_search check_history check_history_labels; do
+          for t in check_calc check_tax check_partners check_accounts check_attach check_search check_history check_history_labels check_invoice_print; do
             out="$(osascript -l JavaScript "tests/$t.js")"
             echo "$out" | tail -1
             echo "$out" | tail -1 | grep -q '^0 件 NG'

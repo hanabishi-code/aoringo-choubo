@@ -75,7 +75,7 @@ function fundPickerValue(id) {
   const c = el.querySelector('input:checked'); return c ? c.value : null;
 }
 function defaultSettings() {
-  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto', depreciationRounding: 'floor', invoiceTaxRounding: 'floor', taxMethod: '', mainBusinessType: 0, taxReview: '' };
+  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', postalCode: '', fax: '', bankName: '', bankBranch: '', bankAccountType: '', bankAccountNumber: '', bankAccountHolder: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto', depreciationRounding: 'floor', invoiceTaxRounding: 'floor', taxMethod: '', mainBusinessType: 0, taxReview: '' };
 }
 function toast(msg, ms) {
   const wrap = document.getElementById('toast-wrap'); const el = document.createElement('div');
@@ -1439,6 +1439,7 @@ function invoiceMissing(inv) {
   return m;
 }
 const INVOICE_STATUSES = ['下書き', '送付済み(未入金)', '入金済み'];
+const HONORIFICS = ['御中', '様'];
 function isUnpaidInvoice(inv) { return inv.status === '送付済み(未入金)'; }
 // 下書きの請求書だけ、取引先の名前の変更・統合に合わせて宛先名を変える(送付済み・入金済みの宛先は発行したときのまま)
 function isDraftInvoice(inv) { return !inv.status || inv.status === '下書き'; }
@@ -1456,7 +1457,9 @@ function viewInvoiceForm() {
     '<section class="block"><h2>' + (editingInvoiceId ? '請求書を編集' : '新しい請求書') + '</h2>' +
       '<div class="field-row"><div class="field"><label>請求書番号</label><input type="text" id="inv-number" value="' + esc(d.number) + '"></div>' +
       '<div class="field"><label>発行日</label><input type="date" id="inv-issue" value="' + esc(d.issueDate) + '"></div></div>' +
-      '<div class="field"><label>宛先(取引先)</label>' + partnerPickerHtml('inv-client', d.partnerId, d.clientName) + '</div>' +
+      '<div class="field-row"><div class="field"><label>宛先(取引先)</label>' + partnerPickerHtml('inv-client', d.partnerId, d.clientName) + '</div>' +
+      '<div class="field" style="max-width:110px;"><label>敬称</label><select id="inv-honorific">' + HONORIFICS.map(function (h) { return '<option' + ((d.honorific || '御中') === h ? ' selected' : '') + '>' + h + '</option>'; }).join('') + '</select></div></div>' +
+      '<div class="field" style="max-width:160px;"><label>宛先の郵便番号(任意)</label><input type="text" id="inv-client-postal" maxlength="10" value="' + esc(d.clientPostalCode || '') + '" placeholder="123-4567"></div>' +
       '<div class="field"><label>状態</label><select id="inv-status">' + INVOICE_STATUSES.map(function (st) { return '<option' + ((d.status || '下書き') === st ? ' selected' : '') + '>' + st + '</option>'; }).join('') + '</select></div>' +
       '<div class="field"><label>宛先住所(任意)</label><input type="text" id="inv-client-addr" value="' + esc(d.clientAddress) + '"></div>' +
       '<div class="field-row"><div class="field"><label>取引年月日(または期間)</label><input type="text" id="inv-txdate" maxlength="40" value="' + esc(d.transactionDate || '') + '" placeholder="例: 2026年9月30日 / 2026年9月分"></div>' +
@@ -1585,14 +1588,15 @@ function bindPartnerEvents() {
   document.querySelectorAll('[data-partner-edit]').forEach(function (a) { a.addEventListener('click', function () {
     const p = findById(state.partners, a.dataset.partnerEdit); if (!p) return;
     openModal('取引先を編集', '<div class="field"><label>名前</label><input type="text" id="pt-name" maxlength="100" value="' + esc(p.name) + '"></div>' +
-      '<div class="field"><label>住所(任意・請求書の宛先住所に使う)</label><input type="text" id="pt-addr" maxlength="200" value="' + esc(p.address || '') + '"></div>' +
+      '<div class="field-row"><div class="field" style="max-width:140px;"><label>郵便番号(任意)</label><input type="text" id="pt-postal" maxlength="10" value="' + esc(p.postalCode || '') + '"></div>' +
+      '<div class="field"><label>住所(任意・請求書の宛先住所に使う)</label><input type="text" id="pt-addr" maxlength="200" value="' + esc(p.address || '') + '"></div></div>' +
       '<button class="btn block" id="pt-save">保存する</button>');
     document.getElementById('pt-save').addEventListener('click', async function () {
       const name = normName(val('pt-name')).slice(0, 100); if (!name) { toast('名前を入力してください'); return; }
       const other = findPartnerByName(name); if (other && other.id !== p.id) { toast('同じ名前の取引先があります。「統合」を使ってください', 6000); return; }
       // 請求書の宛先名もそろえてから保存する(取引先の変更と同じ保存で書き込まれる)
       state.invoices = state.invoices.map(function (inv) { return inv.partnerId === p.id && isDraftInvoice(inv) ? Object.assign({}, inv, { clientName: name }) : inv; });
-      await Store.updatePartner(p.id, { name: name, address: val('pt-addr').slice(0, 200) || undefined });
+      await Store.updatePartner(p.id, { name: name, address: val('pt-addr').slice(0, 200) || undefined, postalCode: val('pt-postal').slice(0, 10) || undefined });
       closeModal(); renderView();
     });
   }); });
@@ -1664,10 +1668,17 @@ function viewSettings() {
     '<section class="block"><h2>事業者情報</h2>' +
       '<div class="field"><label>屋号・事業者名</label><input type="text" id="s-businessName" value="' + esc(s.businessName) + '"></div>' +
       '<div class="field"><label>氏名</label><input type="text" id="s-ownerName" value="' + esc(s.ownerName) + '"></div>' +
-      '<div class="field"><label>住所</label><input type="text" id="s-address" value="' + esc(s.address) + '"></div>' +
-      '<div class="field"><label>電話番号</label><input type="text" id="s-phone" value="' + esc(s.phone) + '"></div>' +
+      '<div class="field-row"><div class="field" style="max-width:140px;"><label>郵便番号(任意)</label><input type="text" id="s-postalCode" maxlength="10" value="' + esc(s.postalCode) + '" placeholder="123-4567"></div>' +
+      '<div class="field"><label>住所</label><input type="text" id="s-address" value="' + esc(s.address) + '"></div></div>' +
+      '<div class="field-row"><div class="field"><label>電話番号</label><input type="text" id="s-phone" value="' + esc(s.phone) + '"></div>' +
+      '<div class="field"><label>FAX(任意)</label><input type="text" id="s-fax" value="' + esc(s.fax) + '"></div></div>' +
       '<div class="field"><label>インボイス登録番号(任意)</label><input type="text" id="s-invoiceRegNo" value="' + esc(s.invoiceRegNo) + '"></div>' +
-      '<div class="field"><label>振込先(請求書に表示)</label><textarea id="s-bankInfo">' + esc(s.bankInfo) + '</textarea></div>' +
+      '<div class="field"><label>振込先(請求書に表示)</label>' +
+        '<div class="field-row"><div class="field"><input type="text" id="s-bankName" value="' + esc(s.bankName) + '" placeholder="銀行名(例: ○○銀行)"></div><div class="field"><input type="text" id="s-bankBranch" value="' + esc(s.bankBranch) + '" placeholder="支店名(例: ○○支店)"></div></div>' +
+        '<div class="field-row"><div class="field" style="max-width:110px;"><select id="s-bankAccountType">' + ['', '普通', '当座'].map(function (t) { return '<option value="' + t + '"' + ((s.bankAccountType || '') === t ? ' selected' : '') + '>' + (t || '種別') + '</option>'; }).join('') + '</select></div>' +
+        '<div class="field"><input type="text" id="s-bankAccountNumber" value="' + esc(s.bankAccountNumber) + '" placeholder="口座番号"></div><div class="field"><input type="text" id="s-bankAccountHolder" value="' + esc(s.bankAccountHolder) + '" placeholder="口座名義(カナ)"></div></div>' +
+        (s.bankInfo ? '<div class="note">以前の振込先(まとめて入力した文章): <span style="white-space:pre-wrap;">' + esc(s.bankInfo) + '</span><br>上の欄に分けて入力してください。分けて入力するまでは、この文章を請求書に印刷します。</div>' : '') +
+      '</div>' +
       '<button class="btn secondary" id="save-business">保存する</button>' +
     '</section>' +
     '<section class="block"><h2>口座(普通預金)</h2><div class="note">預金を口座ごとに分けて記録できます。口座の名前はいつでも変えられます。取引・固定資産で使われておらず、開始残高が 0 の口座だけ削除できます(最後の1つは削除できません)。</div>' +
@@ -1759,7 +1770,7 @@ function bindViewEvents() {
   if (newInv) newInv.addEventListener('click', function () {
     state.settings.invoiceSeq = (state.settings.invoiceSeq || 0) + 1;
     const num = todayStr().slice(0, 4) + '-' + String(state.settings.invoiceSeq).padStart(3, '0');
-    invoiceDraft = { number: num, issueDate: todayStr(), dueDate: '', clientName: '', clientAddress: '', transactionDate: '', taxRounding: state.settings.invoiceTaxRounding || 'floor', items: [{ name: '', qty: 1, unitPrice: 0, taxRate: 10 }], taxRate: 10, notes: '', status: '下書き' };
+    invoiceDraft = { number: num, issueDate: todayStr(), dueDate: '', clientName: '', clientAddress: '', transactionDate: '', honorific: '御中', clientPostalCode: '', taxRounding: state.settings.invoiceTaxRounding || 'floor', items: [{ name: '', qty: 1, unitPrice: 0, taxRate: 10 }], taxRate: 10, notes: '', status: '下書き' };
     editingInvoiceId = null; renderView();
   });
   document.querySelectorAll('[data-edit-inv]').forEach(function (a) { a.addEventListener('click', function () { const inv = state.invoices.find(function (i) { return i.id === a.dataset.editInv; }); invoiceDraft = JSON.parse(JSON.stringify(inv)); editingInvoiceId = inv.id; renderView(); }); });
@@ -1768,13 +1779,15 @@ function bindViewEvents() {
   if (document.getElementById('inv-items')) renderInvoiceItems();
   const addItem = document.getElementById('inv-add-item'); if (addItem) addItem.addEventListener('click', function () { invoiceDraft.items.push({ name: '', qty: 1, unitPrice: 0, taxRate: 10 }); renderInvoiceItems(); updateInvoiceTotalsDisplay(); });
 
-  [['inv-number', 'number'], ['inv-issue', 'issueDate'], ['inv-client-addr', 'clientAddress'], ['inv-due', 'dueDate'], ['inv-txdate', 'transactionDate'], ['inv-status', 'status'], ['inv-notes', 'notes']].forEach(function (pair) {
+  [['inv-number', 'number'], ['inv-issue', 'issueDate'], ['inv-client-addr', 'clientAddress'], ['inv-client-postal', 'clientPostalCode'], ['inv-honorific', 'honorific'], ['inv-due', 'dueDate'], ['inv-txdate', 'transactionDate'], ['inv-status', 'status'], ['inv-notes', 'notes']].forEach(function (pair) {
     const el = document.getElementById(pair[0]); if (!el) return; el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', function () { invoiceDraft[pair[1]] = el.value; });
   });
   // 宛先: 取引先を選んだら宛先名と、住所が空なら取引先の住所を入れる。新しく入力するときは入力した名前を宛先にする
   if (invoiceDraft) bindPartnerPicker('inv-client', function (p) {
     const addr = document.getElementById('inv-client-addr');
-    if (p) { invoiceDraft.clientName = p.name; invoiceDraft.partnerId = p.id; if (p.address && addr && !addr.value) { addr.value = p.address; invoiceDraft.clientAddress = p.address; } }
+    const postal = document.getElementById('inv-client-postal');
+    if (p) { invoiceDraft.clientName = p.name; invoiceDraft.partnerId = p.id; if (p.address && addr && !addr.value) { addr.value = p.address; invoiceDraft.clientAddress = p.address; }
+      if (p.postalCode && postal && !postal.value) { postal.value = p.postalCode; invoiceDraft.clientPostalCode = p.postalCode; } }
     else { invoiceDraft.clientName = (document.getElementById('inv-client-new') || {}).value || ''; delete invoiceDraft.partnerId; }
   });
   const invSave = document.getElementById('inv-save');
@@ -1793,7 +1806,8 @@ function bindViewEvents() {
   const invCancel = document.getElementById('inv-cancel'); if (invCancel) invCancel.addEventListener('click', function () { invoiceDraft = null; editingInvoiceId = null; renderView(); });
 
   const saveBiz = document.getElementById('save-business');
-  if (saveBiz) saveBiz.addEventListener('click', function () { Store.saveSettings({ businessName: val('s-businessName'), ownerName: val('s-ownerName'), address: val('s-address'), phone: val('s-phone'), invoiceRegNo: val('s-invoiceRegNo'), bankInfo: val('s-bankInfo') }).then(renderShell); });
+  if (saveBiz) saveBiz.addEventListener('click', function () { Store.saveSettings({ businessName: val('s-businessName'), ownerName: val('s-ownerName'), address: val('s-address'), phone: val('s-phone'), invoiceRegNo: val('s-invoiceRegNo'), postalCode: val('s-postalCode'), fax: val('s-fax'),
+    bankName: val('s-bankName'), bankBranch: val('s-bankBranch'), bankAccountType: val('s-bankAccountType'), bankAccountNumber: val('s-bankAccountNumber'), bankAccountHolder: val('s-bankAccountHolder') }).then(renderShell); });
   const bankAdd = document.getElementById('bank-add');
   if (bankAdd) bankAdd.addEventListener('click', async function () {
     const name = normName(val('bank-new')).slice(0, 60); if (!name) { toast('口座の名前を入力してください'); return; }
@@ -1870,25 +1884,74 @@ async function onSubmitTx(e) {
 }
 
 /* ============================== 印刷 ============================== */
-function printInvoice(inv) {
-  const t = invoiceTotals(inv); const s = state.settings;
-  const rows = (inv.items || []).map(function (it) {
-    return '<tr><td style="padding:8px 4px;border-bottom:1px solid #ccc;">' + esc(it.name) + (itemRate(inv, it) === 8 ? ' ※' : '') + '</td><td style="padding:8px 4px;border-bottom:1px solid #ccc;text-align:right;">' + it.qty + '</td><td style="padding:8px 4px;border-bottom:1px solid #ccc;text-align:right;">' + yen(it.unitPrice) + '</td><td style="padding:8px 4px;border-bottom:1px solid #ccc;text-align:right;">' + yen((Number(it.qty) || 0) * (Number(it.unitPrice) || 0)) + '</td></tr>';
-  }).join('');
-  document.getElementById('print-area').innerHTML =
-    '<div style="font-family:sans-serif;color:#222;max-width:680px;margin:0 auto;">' +
-      '<h1 style="font-size:24px;margin-bottom:4px;">請求書</h1><div style="color:#666;margin-bottom:24px;">No. ' + esc(inv.number) + '</div>' +
-      '<div style="display:flex;justify-content:space-between;margin-bottom:24px;"><div><div style="font-size:16px;font-weight:bold;">' + esc(inv.clientName) + ' 様</div><div style="color:#666;">' + esc(inv.clientAddress) + '</div></div>' +
-      '<div style="text-align:right;color:#444;"><div>発行日: ' + esc(inv.issueDate) + '</div>' + (inv.transactionDate ? '<div>取引年月日: ' + esc(inv.transactionDate) + '</div>' : '') + (inv.dueDate ? '<div>お支払期限: ' + esc(inv.dueDate) + '</div>' : '') +
-      '<div style="margin-top:10px;font-weight:bold;">' + esc(s.businessName || s.ownerName || '') + '</div><div>' + esc(s.address || '') + '</div><div>' + esc(s.phone || '') + '</div>' +
-      (s.invoiceRegNo ? '<div>登録番号: ' + esc(s.invoiceRegNo) + '</div>' : '') + '</div></div>' +
-      '<div style="font-size:20px;font-weight:bold;margin-bottom:16px;">ご請求金額: ' + yen(t.total) + '</div>' +
-      '<table style="width:100%;border-collapse:collapse;margin-bottom:16px;"><tr><th style="text-align:left;border-bottom:2px solid #222;padding:6px 4px;">内容</th><th style="text-align:right;border-bottom:2px solid #222;padding:6px 4px;">数量</th><th style="text-align:right;border-bottom:2px solid #222;padding:6px 4px;">単価</th><th style="text-align:right;border-bottom:2px solid #222;padding:6px 4px;">金額</th></tr>' + rows + '</table>' +
-      (t.byRate.some(function (g) { return g.rate === 8; }) ? '<div style="font-size:12px;color:#555;margin-bottom:8px;">※は軽減税率(8%)対象です</div>' : '') +
-      '<div style="text-align:right;">' + t.byRate.map(function (g) { return '<div>' + esc(rateLabel(g.rate)) + '対象 ' + yen(g.subtotal) + '(消費税 ' + yen(g.tax) + ')</div>'; }).join('') + '<div style="margin-top:4px;">税抜合計: ' + yen(t.subtotal) + ' / 消費税合計: ' + yen(t.tax) + '</div><div style="font-size:18px;font-weight:bold;margin-top:4px;">合計: ' + yen(t.total) + '</div></div>' +
-      (s.bankInfo ? '<div style="margin-top:24px;"><strong>お振込先</strong><br>' + esc(s.bankInfo).replace(/\n/g, '<br>') + '</div>' : '') +
-      (inv.notes ? '<div style="margin-top:16px;color:#555;">' + esc(inv.notes).replace(/\n/g, '<br>') + '</div>' : '') +
-    '</div>';
+// 印刷する内容(請求書 + 設定)。送付済みの請求書は、送付したときに保存した内容を使う(段階③)
+function invoiceViewModel(inv) {
+  const st = state.settings || {};
+  const hasSplitBank = !!(st.bankName || st.bankBranch || st.bankAccountNumber || st.bankAccountHolder);
+  return {
+    number: inv.number || '', issueDate: inv.issueDate || '', transactionDate: inv.transactionDate || '', dueDate: inv.dueDate || '',
+    client: { name: inv.clientName || '', honorific: inv.honorific || '御中', postal: inv.clientPostalCode || '', address: inv.clientAddress || '' },
+    issuer: { name: st.businessName || st.ownerName || '', owner: st.businessName ? (st.ownerName || '') : '', postal: st.postalCode || '', address: st.address || '', phone: st.phone || '', fax: st.fax || '', regNo: st.invoiceRegNo || '' },
+    bank: hasSplitBank ? { name: st.bankName || '', branch: st.bankBranch || '', type: st.bankAccountType || '', number: st.bankAccountNumber || '', holder: st.bankAccountHolder || '' } : { text: st.bankInfo || '' },
+    items: (inv.items || []).map(function (it) { return { name: it.name || '', qty: Number(it.qty) || 0, unitPrice: Number(it.unitPrice) || 0, taxRate: itemRate(inv, it) }; }),
+    taxRounding: inv.taxRounding || 'round', notes: inv.notes || ''
+  };
+}
+function num(n) { n = Math.round(Number(n) || 0); return (n < 0 ? '−' : '') + Math.abs(n).toLocaleString('ja-JP'); }
+// 請求書の印刷用 HTML(A4 縦・明朝体)。opts.copy = true で「控」の印を付ける
+function invoicePrintHtml(m, opts) {
+  opts = opts || {};
+  const t = invoiceTotals({ items: m.items, taxRounding: m.taxRounding });
+  const g = function (r) { return t.byRate.find(function (x) { return x.rate === r; }) || { subtotal: 0, tax: 0 }; };
+  const has8 = t.byRate.some(function (x) { return x.rate === 8; });
+  const jpDate = function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(d) ? historyDate(d) : esc(d); };
+  // A4 縦 1枚に収まるよう、余白・行の高さを詰めている(明細 9 行のとき約 950px。印刷できる高さは約 1024px)
+  const B = 'border:1px solid #333;', cell = 'padding:3px 8px;', th = 'background:#e6e6e6;font-weight:normal;';
+  const rows = m.items.map(function (it) {
+    return '<tr><td style="' + cell + 'border-left:1px solid #333;border-bottom:1px solid #999;">' + esc(it.name) + (it.taxRate === 8 ? ' ※' : '') + '</td>' +
+      '<td style="' + cell + 'text-align:right;border-left:1px dotted #999;border-bottom:1px solid #999;">' + num(it.qty) + '</td>' +
+      '<td style="' + cell + 'text-align:right;border-left:1px dotted #999;border-bottom:1px solid #999;">' + num(it.unitPrice) + '</td>' +
+      '<td style="' + cell + 'text-align:right;border-left:1px dotted #999;border-right:1px solid #333;border-bottom:1px solid #999;">' + num(it.qty * it.unitPrice) + '</td></tr>';
+  });
+  while (rows.length < 9) rows.push('<tr><td style="' + cell + 'height:1.3em;border-left:1px solid #333;border-bottom:1px solid #999;"></td><td style="border-left:1px dotted #999;border-bottom:1px solid #999;"></td><td style="border-left:1px dotted #999;border-bottom:1px solid #999;"></td><td style="border-left:1px dotted #999;border-right:1px solid #333;border-bottom:1px solid #999;"></td></tr>');
+  const iss = m.issuer;
+  const bankHtml = m.bank.text !== undefined ? '<div style="white-space:pre-wrap;">' + esc(m.bank.text) + '</div>'
+    : '<div>' + esc([m.bank.name, m.bank.branch].filter(Boolean).join(' ')) + '</div><div>' + esc([m.bank.type, m.bank.number].filter(Boolean).join(' ')) + '</div>' + (m.bank.holder ? '<div>口座名義: ' + esc(m.bank.holder) + '</div>' : '');
+  return '<div class="invoice-sheet" style="font-family:\'Hiragino Mincho ProN\',\'Hiragino Mincho Pro\',\'Yu Mincho\',serif;color:#111;font-size:12px;line-height:1.45;position:relative;">' +
+    (opts.copy ? '<div style="position:absolute;top:0;right:0;border:2px solid #b33f2e;color:#b33f2e;font-size:20px;width:40px;height:40px;line-height:36px;text-align:center;border-radius:50%;">控</div>' : '') +
+    '<h1 style="text-align:center;font-size:24px;letter-spacing:0.5em;font-weight:normal;margin:0 0 2px;">御請求書</h1>' +
+    (m.revisionOf ? '<div style="text-align:center;font-size:12px;margin-bottom:6px;">(請求書番号 ' + esc(m.revisionOf) + ' の修正)</div>' : '<div style="height:6px;"></div>') +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;">' +
+      '<div style="flex:1;padding-top:14px;"><div style="font-size:17px;border-bottom:1px solid #333;padding-bottom:2px;display:inline-block;min-width:70%;">' + esc(m.client.name) + ' ' + esc(m.client.honorific) + '</div>' +
+        (m.client.postal ? '<div style="margin-top:6px;">〒' + esc(m.client.postal) + '</div>' : '') + (m.client.address ? '<div>' + esc(m.client.address) + '</div>' : '') + '</div>' +
+      '<div style="width:46%;">' +
+        '<table style="border-collapse:collapse;width:100%;margin-bottom:6px;">' +
+          [['請求書番号', esc(m.number)], ['発行日', jpDate(m.issueDate)], ['取引年月日', jpDate(m.transactionDate)], ['お支払い期限', jpDate(m.dueDate)]].map(function (r) { return '<tr><th style="' + B + cell + th + 'width:38%;text-align:left;">' + r[0] + '</th><td style="' + B + cell + '">' + r[1] + '</td></tr>'; }).join('') +
+        '</table>' +
+        '<div style="font-size:16px;">' + esc(iss.name) + '</div>' + (iss.owner ? '<div>' + esc(iss.owner) + '</div>' : '') +
+        (iss.postal ? '<div>〒' + esc(iss.postal) + '</div>' : '') + (iss.address ? '<div>' + esc(iss.address) + '</div>' : '') +
+        (iss.phone ? '<div>TEL: ' + esc(iss.phone) + '</div>' : '') + (iss.fax ? '<div>FAX: ' + esc(iss.fax) + '</div>' : '') +
+        (iss.regNo ? '<div>登録番号: ' + esc(iss.regNo) + '</div>' : '') +
+      '</div></div>' +
+    '<div style="margin:10px 0 4px;">下記のとおりご請求申し上げます。</div>' +
+    '<table style="border-collapse:collapse;margin-bottom:6px;"><tr><th style="' + B + 'padding:6px 14px;' + th + '">御請求金額</th><td style="' + B + 'padding:6px 18px;font-size:19px;">¥ ' + num(t.total) + ' <span style="font-size:12px;">(税込)</span></td></tr></table>' +
+    '<hr style="border:none;border-top:1px solid #333;margin:8px 0 10px;">' +
+    '<table style="border-collapse:collapse;width:100%;"><tr>' +
+      ['項目', '数量', '単価', '金額'].map(function (h, i) { return '<th style="' + B + cell + th + (i ? 'text-align:center;width:' + (i === 1 ? '10%' : '17%') + ';' : 'text-align:center;') + '">' + h + '</th>'; }).join('') + '</tr>' +
+      rows.join('') +
+      '<tr><td colspan="3" style="' + B + cell + 'text-align:center;">小計</td><td style="' + B + cell + 'text-align:right;">' + num(t.subtotal) + '</td></tr>' +
+    '</table>' +
+    (has8 ? '<div style="font-size:11px;margin-top:4px;">※は軽減税率(8%)対象</div>' : '') +
+    '<div style="display:flex;gap:16px;margin-top:8px;">' +
+      '<table style="border-collapse:collapse;flex:1;">' + [['合計(税抜)', t.subtotal], ['10%対象', g(10).subtotal], ['8%対象', g(8).subtotal]].map(function (r) { return '<tr><th style="' + B + cell + th + 'text-align:left;">' + r[0] + '</th><td style="' + B + cell + 'text-align:right;">' + num(r[1]) + '</td></tr>'; }).join('') + '</table>' +
+      '<table style="border-collapse:collapse;flex:1;">' + [['消費税額計', t.tax], ['消費税(10%)', g(10).tax], ['消費税(8%)', g(8).tax]].map(function (r) { return '<tr><th style="' + B + cell + th + 'text-align:left;">' + r[0] + '</th><td style="' + B + cell + 'text-align:right;">' + num(r[1]) + '</td></tr>'; }).join('') + '</table>' +
+    '</div>' +
+    '<div style="margin-top:10px;"><div>【振込先】</div>' + bankHtml + '</div>' +
+    '<div style="margin-top:8px;"><div>備考</div><div style="' + B + 'min-height:3.5em;padding:4px 8px;white-space:pre-wrap;">' + esc(m.notes) + '</div></div>' +
+  '</div>';
+}
+function printInvoice(inv, opts) {
+  document.getElementById('print-area').innerHTML = invoicePrintHtml(invoiceViewModel(inv), opts);
   // window.print() は Tauri(WKWebView)では印刷ダイアログが開かないため、Rust 側の印刷を呼ぶ
   setTimeout(function () {
     invoke('print_page').catch(function (e) { toast('印刷できませんでした(' + String(typeof e === 'string' ? e : (e && e.message) || '').slice(0, 80) + ')', 8000); });
@@ -1937,7 +2000,7 @@ async function exportBackup() {
   if (ok && missing) toast('見つからない画像が ' + missing + ' 枚ありました(それ以外は書き出しました)');
 }
 /* ============================== バックアップの検証 ============================== */
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 const MAX_RECEIPT_BYTES = 20 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+\/]*={0,2}$/;
 // 旧版のデータを現在の形式に移行する。版ごとに1段ずつ上げる
@@ -2028,6 +2091,15 @@ function migrateBackup(raw) {
     }
     v = 9;
   }
+  if (v < 10) {
+    // v9 → v10: 請求書の見た目の作り直し。請求書に敬称(honorific)と宛先の郵便番号、設定に郵便番号・FAX・振込先の分割入力、
+    // 取引先に郵便番号を追加。以前の請求書は「様」で印刷していたので、敬称は「様」のまま(新しい請求書の初期値は「御中」)。
+    // 振込先の文章(bankInfo)は自動で分けない(設定画面で分けて入力するよう案内し、それまでは文章を印刷)
+    if (Array.isArray(out.invoices)) out.invoices = out.invoices.map(function (inv) {
+      return (inv && typeof inv === 'object' && inv.honorific === undefined) ? Object.assign({}, inv, { honorific: '様' }) : inv;
+    });
+    v = 10;
+  }
   out.schemaVersion = v;
   return out;
 }
@@ -2109,7 +2181,7 @@ function sanitizeBackup(raw) {
   out.partners = cleanRecords(raw.partners, function (p) { return typeof p.name === 'string' && normName(p.name); });
   if (out.partners) {
     const seen = new Set();
-    out.partners = out.partners.map(function (p) { const o = { id: p.id, name: normName(p.name).slice(0, 100) }; if (typeof p.address === 'string' && p.address) o.address = p.address.slice(0, 200); return o; })
+    out.partners = out.partners.map(function (p) { const o = { id: p.id, name: normName(p.name).slice(0, 100) }; if (typeof p.address === 'string' && p.address) o.address = p.address.slice(0, 200); if (typeof p.postalCode === 'string' && p.postalCode) o.postalCode = p.postalCode.slice(0, 10); return o; })
       .filter(function (p) { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
   }
   out.bankAccounts = cleanRecords(raw.bankAccounts, function (a) { return typeof a.name === 'string' && normName(a.name); });
@@ -2132,6 +2204,8 @@ function sanitizeBackup(raw) {
   if (out.invoices) out.invoices.forEach(function (inv) {
     if (Array.isArray(inv.items)) inv.items.forEach(function (it) { if (it && typeof it === 'object' && [10, 8, 0].indexOf(Number(it.taxRate)) < 0) it.taxRate = 10; });
     if (inv.transactionDate !== undefined) inv.transactionDate = String(inv.transactionDate).slice(0, 40);
+    if (inv.honorific !== undefined && HONORIFICS.indexOf(inv.honorific) < 0) inv.honorific = '御中';
+    if (inv.clientPostalCode !== undefined) inv.clientPostalCode = String(inv.clientPostalCode).slice(0, 10);
     if (inv.taxRounding !== undefined && !Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, inv.taxRounding)) inv.taxRounding = 'round';
   });
   if (raw.inventoryYearEnd && typeof raw.inventoryYearEnd === 'object') {
@@ -2148,6 +2222,7 @@ function sanitizeBackup(raw) {
       else if (k === 'depreciationRounding' || k === 'invoiceTaxRounding') { if (Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, v)) out.settings[k] = v; }
       else if (k === 'taxMethod') { if (Object.prototype.hasOwnProperty.call(TAX_METHODS, v)) out.settings[k] = v; }
       else if (k === 'taxReview') { if (v === '' || v === 'pending') out.settings[k] = v; }
+      else if (k === 'bankAccountType') { if (v === '' || v === '普通' || v === '当座') out.settings[k] = v; }
       else if (typeof v === 'string') out.settings[k] = v.slice(0, 2000);
     });
   }
@@ -2224,7 +2299,7 @@ const HISTORY_FIELDS = [
   ['receiptAssetId', 'レシート画像', 'receipt'], ['linkedAssetId', '連動する固定資産', 'linkedAsset'],
   // 請求書
   ['number', '請求書番号', 'text'], ['issueDate', '発行日', 'date'], ['transactionDate', '取引年月日', 'text'], ['dueDate', '支払期限', 'date'],
-  ['clientName', '宛先', 'text'], ['clientAddress', '宛先住所', 'text'], ['status', '状態', 'text'], ['items', '明細', 'items'],
+  ['clientName', '宛先', 'text'], ['honorific', '敬称', 'text'], ['clientPostalCode', '宛先の郵便番号', 'text'], ['clientAddress', '宛先住所', 'text'], ['status', '状態', 'text'], ['items', '明細', 'items'],
   ['taxRate', '税率', 'rate'], ['taxRounding', '消費税の端数処理', 'rounding'], ['notes', '備考', 'text'],
   // 固定資産
   ['name', '名称', 'text'], ['acquisitionDate', '取得日', 'date'], ['cost', '取得価額', 'yen'], ['payFund', '支払い方法', 'payFund'],
@@ -2233,7 +2308,8 @@ const HISTORY_FIELDS = [
   // 棚卸高・中間納付・取引先
   ['opening', '期首棚卸高', 'yen'], ['closing', '期末棚卸高', 'yen'], ['national', '中間納付(国税)', 'yen'], ['local', '中間納付(地方)', 'yen'], ['address', '住所', 'text'],
   // 設定
-  ['businessName', '屋号', 'text'], ['ownerName', '氏名', 'text'], ['phone', '電話番号', 'text'], ['invoiceRegNo', '登録番号', 'text'], ['bankInfo', '振込先', 'text'],
+  ['businessName', '屋号', 'text'], ['ownerName', '氏名', 'text'], ['postalCode', '郵便番号', 'text'], ['phone', '電話番号', 'text'], ['fax', 'FAX', 'text'], ['invoiceRegNo', '登録番号', 'text'],
+  ['bankName', '振込先の銀行名', 'text'], ['bankBranch', '振込先の支店名', 'text'], ['bankAccountType', '振込先の種別', 'text'], ['bankAccountNumber', '振込先の口座番号', 'text'], ['bankAccountHolder', '振込先の口座名義', 'text'], ['bankInfo', '振込先(以前の文章)', 'text'],
   ['openingDate', '開始日', 'date'], ['openingCash', '開始時の現金', 'yen'], ['openingBank', '開始時の預金', 'yen'], ['invoiceSeq', '請求書の連番', 'int'],
   ['theme', '表示テーマ', 'theme'], ['taxMethod', '消費税の課税方式', 'taxMethod'], ['mainBusinessType', '主たる事業区分', 'businessType'],
   ['invoiceTaxRounding', '請求書の消費税の端数処理', 'rounding'], ['depreciationRounding', '減価償却の端数処理', 'rounding'], ['taxReview', '税区分の見直し', 'taxReview'],
