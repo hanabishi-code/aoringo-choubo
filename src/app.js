@@ -2390,11 +2390,11 @@ function sanitizeBackup(raw) {
       if (!Object.prototype.hasOwnProperty.call(raw.settings, k)) return;
       const v = raw.settings[k];
       if (k === 'mainBusinessType') { const n = Number(v); if (n === 0 || BUSINESS_TYPES[n]) out.settings[k] = n; }
+      else if (k === 'hideInvoiceTab') { if (Number(v) === 0 || Number(v) === 1) out.settings[k] = Number(v); } // 数値の一般の検査より先に
       else if (typeof def[k] === 'number') { const n = Number(v); if (Number.isFinite(n)) out.settings[k] = n; }
       else if (k === 'depreciationRounding' || k === 'invoiceTaxRounding') { if (Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, v)) out.settings[k] = v; }
       else if (k === 'taxMethod') { if (Object.prototype.hasOwnProperty.call(TAX_METHODS, v)) out.settings[k] = v; }
       else if (k === 'taxReview') { if (v === '' || v === 'pending') out.settings[k] = v; }
-      else if (k === 'hideInvoiceTab') { if (Number(v) === 0 || Number(v) === 1) out.settings[k] = Number(v); }
       else if (k === 'bankAccountType') { if (v === '' || v === '普通' || v === '当座') out.settings[k] = v; }
       else if (typeof v === 'string') out.settings[k] = v.slice(0, 2000);
     });
