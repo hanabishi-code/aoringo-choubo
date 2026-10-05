@@ -1102,26 +1102,30 @@ function renderDynamicFields(kind, tx) {
 function fundRadio(k, current) { return '<label><input type="radio" name="fund" value="' + k + '" ' + (k === current ? 'checked' : '') + '><span>' + fundLabel(k) + '</span></label>'; }
 function viewEntry() {
   const editing = editingTxId ? state.transactions.find(function (t) { return t.id === editingTxId; }) : null;
-  const kind = editing ? editing.kind : 'expense';
+  const pre = !editing ? entryPrefill : null; // 請求書から売上を記録するときの下書き
+  const base = editing || pre;
+  const kind = base ? base.kind : 'expense';
+  const preInv = pre ? findById(state.invoices, pre.invoiceId) : null;
   const q = getSearch('entry'); const searching = isSearchActive(q);
   const sorted = state.transactions.slice().sort(function (a, b) { return (b.date + b.createdAt) < (a.date + a.createdAt) ? -1 : 1; });
   const matched = searching ? sorted.filter(function (t) { return txMatches(t, q); }) : sorted;
   const recent = matched.slice(0, searching ? 300 : 25);
   return (
-    '<section class="block"><h2>' + (editing ? '取引を編集' : '取引を記録') + '</h2>' + storageFlag() +
+    '<section class="block"><h2>' + (editing ? '取引を編集' : (pre ? '請求書から売上を記録' : '取引を記録')) + '</h2>' + storageFlag() +
+      (pre ? '<div class="storage-flag"><span class="storage-dot warn"></span><div>請求書 No.' + esc(preInv ? preInv.number : '') + ' の売上' + (pre.rate === 8 || (pre.next && pre.next.length) ? '(' + esc(rateLabel(pre.rate)) + 'の分)' : '') + 'を入れてあります。<strong>日付を確かめてください</strong>(取引年月日が期間のときは、その月の末日にしています)。「記録する」を押すまで保存されません。</div></div>' : '') +
       '<form id="tx-form">' +
         '<div class="field"><label>区分</label><select id="f-kind">' + kindSelectHtml(kind) + '</select></div>' +
         '<div class="field-row">' +
-          '<div class="field"><label>日付</label><input type="date" id="f-date" value="' + esc(editing ? editing.date : todayStr()) + '"></div>' +
-          '<div class="field"><label>金額(円)</label><input type="number" id="f-amount" min="0" step="1" value="' + (editing ? editing.amount : '') + '" placeholder="0"></div>' +
+          '<div class="field"><label>日付</label><input type="date" id="f-date" value="' + esc(base ? base.date : todayStr()) + '"></div>' +
+          '<div class="field"><label>金額(円)</label><input type="number" id="f-amount" min="0" step="1" value="' + (base ? base.amount : '') + '" placeholder="0"></div>' +
         '</div>' +
         '<div class="field" id="account-field"></div>' +
-        '<div class="field" id="fund-field-wrap"><label>資金(現金・口座)</label>' + fundPickerHtml('fund-group', editing ? editing.fund : 'cash') + '</div>' +
-        '<div class="field"><label>取引先(任意)</label>' + partnerPickerHtml('f-partner', editing ? editing.partnerId : null, '', true) + '</div>' +
-        '<div class="field"><label>メモ</label><input type="text" id="f-memo" value="' + esc(editing ? (editing.memo || '') : '') + '" placeholder="例:交通費など"></div>' +
+        '<div class="field" id="fund-field-wrap"><label>資金(現金・口座)</label>' + fundPickerHtml('fund-group', editing ? editing.fund : (pre ? bankAccounts()[0].id : 'cash')) + '</div>' +
+        '<div class="field"><label>取引先(任意)</label>' + partnerPickerHtml('f-partner', base ? base.partnerId : null, '', true) + '</div>' +
+        '<div class="field"><label>メモ</label><input type="text" id="f-memo" value="' + esc(base ? (base.memo || '') : '') + '" placeholder="例:交通費など"></div>' +
         '<div class="field"><label>添付ファイル(レシート・領収書・請求書など。任意)</label>' + attachWidgetHtml('tx', txFormAttachments(editing)) + '</div>' +
         '<div style="display:flex; gap:10px; margin-top:16px;"><button type="submit" class="btn block">' + (editing ? '更新する' : '記録する') + '</button>' +
-          (editing ? '<button type="button" id="cancel-edit" class="btn secondary">キャンセル</button>' : '') +
+          (editing || pre ? '<button type="button" id="cancel-edit" class="btn secondary">キャンセル</button>' : '') +
         '</div>' +
       '</form>' +
     '</section>' +
@@ -1141,7 +1145,7 @@ function txRowHtml(t) {
   return (
     '<div class="tx-row">' + (t.attachments && t.attachments.length ? attachmentTileHtml(t.attachments[0]) : '<div class="tx-thumb"></div>') +
       '<div class="tx-main"><div class="tx-top"><span class="tx-cat">' + esc(label) + '</span><span class="tx-amt num ' + cls + '">' + sign + yen(t.amount) + '</span></div>' +
-      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + (t.linkedAssetId && t.kind === 'contribution' ? '<span class="tag">固定資産の売却</span> ' : '') + (t.attachments && t.attachments.length > 1 ? '<span class="tag">添付 ' + t.attachments.length + '</span> ' : '') + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.partnerId ? ' ・ ' + esc(partnerName(t.partnerId)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
+      '<div class="tx-meta"><span class="tag">' + esc(KIND_LABELS[t.kind]) + '</span> ' + (t.linkedAssetId && t.kind === 'contribution' ? '<span class="tag">固定資産の売却</span> ' : '') + (t.attachments && t.attachments.length > 1 ? '<span class="tag">添付 ' + t.attachments.length + '</span> ' : '') + (t.invoiceId ? '<span class="tag">請求書から</span> ' : '') + esc(t.date) + (t.fund ? ' ・ ' + esc(fundLabel(t.fund)) : '') + (t.partnerId ? ' ・ ' + esc(partnerName(t.partnerId)) : '') + (t.memo ? ' ・ ' + esc(t.memo) : '') + '</div>' +
       '<div class="tx-actions"><a data-edit-tx=\"' + esc(t.id) + '\">編集</a><a data-del-tx=\"' + esc(t.id) + '\" style="color:var(--danger);">削除</a></div></div></div>'
   );
 }
@@ -1461,6 +1465,52 @@ async function markInvoiceSent(id) {
   openModal('送付済みにしました', '<p style="line-height:1.7;">送った請求書の控え(PDF)は、この請求書に添付しておきましたか?<br>電子取引データとして保存が必要です(原則7年)。まだのときは、印刷の画面の「PDF」→「PDFとして保存」で保存し、請求書の「添付ファイル」に加えてください。</p><div style="text-align:right;margin-top:12px;"><button class="btn" id="sent-ok">わかりました</button></div>');
   document.getElementById('sent-ok').addEventListener('click', closeModal);
 }
+/* ---------- 請求書から売上を記録する(自動では作らない。押して「記録する」を押したときだけ保存) ---------- */
+let entryPrefill = null; // 入力画面に入れておく内容(請求書から売上を記録するとき)
+function invoiceSalesTxs(inv) { return state.transactions.filter(function (t) { return t.invoiceId === inv.id; }); }
+// 売上の日付: 取引年月日が日付ならその日、期間(「2026年8月分」「8月1日〜31日」など)やありえない日付(2月30日)なら
+// その月の末日、年月が読めなければ発行日。どの場合も入力画面で「日付を確かめてください」と出す
+function salesDateFor(view) {
+  const td = String(view.transactionDate || '').normalize('NFKC').trim();
+  const pad = function (n) { return String(n).padStart(2, '0'); };
+  const ok = function (y, m, d) { const dt = new Date(y, m - 1, d); return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d; };
+  const isRange = /[〜~～]|から|まで/.test(td); // 「8月1日〜31日」のような期間は、日付ではなく期間として扱う
+  let m = isRange ? null : /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(td) || (isRange ? null : /^(\d{4})年(\d{1,2})月(\d{1,2})日$/.exec(td)) || (isRange ? null : /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(td));
+  if (m && ok(+m[1], +m[2], +m[3])) return m[1] + '-' + pad(m[2]) + '-' + pad(m[3]);
+  m = /^(\d{4})年(\d{1,2})月/.exec(td) || /^(\d{4})[-\/](\d{1,2})$/.exec(td);
+  if (m && +m[2] >= 1 && +m[2] <= 12) { const last = new Date(+m[1], +m[2], 0).getDate(); return m[1] + '-' + pad(m[2]) + '-' + pad(last); }
+  return view.issueDate || todayStr();
+}
+// 請求書から作る売上の取引の下書き(税率ごとに1件。合計は税込)
+function salesPrefillsFor(inv) {
+  const v = invoiceViewModel(inv);
+  const t = invoiceTotals({ items: v.items, taxRounding: v.taxRounding });
+  const rates = t.byRate.filter(function (g) { return g.rate === 10 || g.rate === 8; });
+  return rates.map(function (g) {
+    return { invoiceId: inv.id, kind: 'income', account: 'sales', date: salesDateFor(v), amount: g.subtotal + g.tax, partnerId: inv.partnerId || null,
+      taxCategory: g.rate === 8 ? 'reduced' : 'standard', rate: g.rate,
+      memo: '請求書 No.' + v.number + (rates.length > 1 ? '(' + rateLabel(g.rate) + '分)' : '') };
+  });
+}
+// まだ記録していない税率の分(すでに記録した取引の税区分で判定)
+function remainingSalesPrefills(inv) {
+  const done = invoiceSalesTxs(inv).map(function (t) { return t.taxCategory; });
+  return salesPrefillsFor(inv).filter(function (p) { return done.indexOf(p.taxCategory) < 0; });
+}
+async function startSalesRecord(id) {
+  const inv = findById(state.invoices, id); if (!inv || !isIssuedInvoice(inv)) return;
+  let list = remainingSalesPrefills(inv);
+  if (!list.length) {
+    if (!(await confirmDialog('この請求書は、すでに売上を記録しています(' + invoiceSalesTxs(inv).length + '件)。二重に記録すると売上が多くなります。それでも記録しますか?', 'それでも記録する'))) return;
+    list = salesPrefillsFor(inv);
+  }
+  if (!list.length) { toast('記録できる金額がありません'); return; }
+  entryPrefill = Object.assign({}, list[0], { next: list.slice(1) });
+  editingTxId = null; formAttach.tx = null; formAttach.txOwner = null;
+  Object.keys(searchState).forEach(function (k) { delete searchState[k]; });
+  currentTab = 'entry'; renderShell(); window.scrollTo(0, 0);
+}
+
 // 修正版を作る: 送付済みの請求書を写した下書きを、次の番号で作る(元の請求書はそのまま残す)
 function makeRevision(id) {
   const inv = findById(state.invoices, id); if (!inv) return;
@@ -1478,10 +1528,11 @@ function invoiceRowHtml(inv) {
   return (
     '<div class="invoice-list-row"><div class="tx-top"><span class="tx-cat">' + esc(inv.clientName || '(宛先未設定)') + '</span><span class="tx-amt num">' + yen(t.total) + '</span></div>' +
       '<div class="tx-meta">No.' + esc(inv.number) + ' ・ ' + esc(inv.issueDate) + ' ・ <span class="tag">' + esc(inv.status || '下書き') + '</span>' +
-        (inv.revisionOf ? ' <span class="tag">' + esc(inv.revisionOf) + ' の修正</span>' : '') + (inv.issued && inv.issued.migrated ? ' <span class="tag">移行時の内容で固定</span>' : '') + '</div>' +
+        (inv.revisionOf ? ' <span class="tag">' + esc(inv.revisionOf) + ' の修正</span>' : '') + (inv.issued && inv.issued.migrated ? ' <span class="tag">移行時の内容で固定</span>' : '') +
+        (invoiceSalesTxs(inv).length ? ' <span class="tag">売上記録済み(' + invoiceSalesTxs(inv).length + '件)</span>' : '') + '</div>' +
       (sendPromptFor === inv.id && !isIssuedInvoice(inv) ? '<div class="storage-flag"><span class="storage-dot warn"></span>印刷したら送付済みにしましょう <a data-send-inv="' + esc(inv.id) + '" style="cursor:pointer;margin-left:8px;">送付済みにする</a> <a data-send-later style="cursor:pointer;margin-left:8px;">あとで</a></div>' : '') +
       '<div class="tx-actions">' + (isIssuedInvoice(inv)
-        ? '<a data-print-inv=\"' + esc(inv.id) + '\">印刷</a>' + (inv.status === '入金済み' ? '<a data-unpaid-inv="' + esc(inv.id) + '">未入金に戻す</a>' : '<a data-paid-inv="' + esc(inv.id) + '">入金済みにする</a>') + '<a data-revise-inv="' + esc(inv.id) + '">修正版を作る</a><a data-attach-inv="' + esc(inv.id) + '">添付</a>'
+        ? '<a data-print-inv=\"' + esc(inv.id) + '\">印刷</a>' + (inv.status === '入金済み' ? '<a data-unpaid-inv="' + esc(inv.id) + '">未入金に戻す</a>' : '<a data-paid-inv="' + esc(inv.id) + '">入金済みにする</a>') + '<a data-sales-inv="' + esc(inv.id) + '">売上を記録</a><a data-revise-inv="' + esc(inv.id) + '">修正版を作る</a><a data-attach-inv="' + esc(inv.id) + '">添付</a>'
         : '<a data-edit-inv=\"' + esc(inv.id) + '\">編集</a><a data-print-inv=\"' + esc(inv.id) + '\">印刷</a><a data-send-inv="' + esc(inv.id) + '">送付済みにする</a>') +
         '<a data-del-inv=\"' + esc(inv.id) + '\" style="color:var(--danger);">削除</a></div></div>'
   );
@@ -1770,16 +1821,18 @@ function bindViewEvents() {
   const txForm = document.getElementById('tx-form');
   if (txForm) {
     const editing = editingTxId ? state.transactions.find(function (t) { return t.id === editingTxId; }) : null;
-    renderDynamicFields(editing ? editing.kind : 'expense', editing);
+    const pre = !editing ? entryPrefill : null;
+    renderDynamicFields(editing ? editing.kind : (pre ? pre.kind : 'expense'), editing || pre);
     const kindSel = document.getElementById('f-kind');
     if (kindSel) kindSel.addEventListener('change', function () { renderDynamicFields(kindSel.value, null); });
     txForm.addEventListener('submit', onSubmitTx);
     const cancelBtn = document.getElementById('cancel-edit');
-    if (cancelBtn) cancelBtn.addEventListener('click', function () { editingTxId = null; renderView(); });
+    if (cancelBtn) cancelBtn.addEventListener('click', function () { editingTxId = null; if (entryPrefill) { entryPrefill = null; toast('記録しませんでした'); } renderView(); });
   }
   const linkedNotice = function (id) { const t = findById(state.transactions, id); if (t && t.linkedAssetId) { toast('この取引は固定資産台帳から自動で作られています。資産・負債タブの固定資産台帳で変更してください', 6000); return true; } return false; };
   document.querySelectorAll('[data-edit-tx]').forEach(function (a) { a.addEventListener('click', function () { if (linkedNotice(a.dataset.editTx)) return; editingTxId = a.dataset.editTx; renderView(); window.scrollTo(0, 0); }); });
-  document.querySelectorAll('[data-del-tx]').forEach(function (a) { a.addEventListener('click', async function () { if (linkedNotice(a.dataset.delTx)) return; if (!(await confirmDialog('この取引を削除しますか?', '削除する'))) return; await Store.deleteTransaction(a.dataset.delTx); renderShell(); }); });
+  document.querySelectorAll('[data-del-tx]').forEach(function (a) { a.addEventListener('click', async function () { if (linkedNotice(a.dataset.delTx)) return; const dt = findById(state.transactions, a.dataset.delTx); const dinv = dt && dt.invoiceId ? findById(state.invoices, dt.invoiceId) : null;
+    if (!(await confirmDialog(dinv ? 'この取引は、請求書 No.' + dinv.number + ' から記録した売上です。削除すると、請求書の「売上記録済み」の数も減ります。削除しますか?' : 'この取引を削除しますか?', '削除する'))) return; await Store.deleteTransaction(a.dataset.delTx); renderShell(); }); });
 
   const jy = document.getElementById('journal-year'); if (jy) jy.addEventListener('change', function () { window.__journalYear = Number(jy.value); renderView(); });
   const jm = document.getElementById('journal-month'); if (jm) jm.addEventListener('change', function () { window.__journalMonth = Number(jm.value); renderView(); });
@@ -1820,6 +1873,7 @@ function bindViewEvents() {
   document.querySelectorAll('[data-send-later]').forEach(function (a) { a.addEventListener('click', function () { sendPromptFor = null; renderView(); }); });
   document.querySelectorAll('[data-paid-inv]').forEach(function (a) { a.addEventListener('click', async function () { await Store.updateInvoice(a.dataset.paidInv, { status: '入金済み' }); renderView(); }); });
   document.querySelectorAll('[data-unpaid-inv]').forEach(function (a) { a.addEventListener('click', async function () { await Store.updateInvoice(a.dataset.unpaidInv, { status: '送付済み(未入金)' }); renderView(); }); });
+  document.querySelectorAll('[data-sales-inv]').forEach(function (a) { a.addEventListener('click', function () { startSalesRecord(a.dataset.salesInv); }); });
   document.querySelectorAll('[data-revise-inv]').forEach(function (a) { a.addEventListener('click', function () { makeRevision(a.dataset.reviseInv); }); });
   // 送付済みの請求書は、添付ファイル(送った控えの PDF など)だけ加えられる
   document.querySelectorAll('[data-attach-inv]').forEach(function (a) { a.addEventListener('click', function () {
@@ -1932,8 +1986,17 @@ async function onSubmitTx(e) {
 
   payload.attachments = (formAttach.tx || []).slice();
 
+  const pre = !editingTxId ? entryPrefill : null;
+  if (pre) payload.invoiceId = pre.invoiceId; // 請求書とつなぐ(売上記録済みの表示・二重記録の注意に使う)
   if (editingTxId) { await Store.updateTransaction(editingTxId, payload); toast('更新しました'); } else { await Store.addTransaction(payload); toast('記録しました'); }
-  editingTxId = null; formAttach.tx = null; formAttach.txOwner = null; renderShell();
+  editingTxId = null; formAttach.tx = null; formAttach.txOwner = null;
+  entryPrefill = null;
+  // 8% の明細があるときは、続けて残りの税率の分を案内する
+  if (pre && pre.next && pre.next.length) {
+    const nx = pre.next[0];
+    if (await confirmDialog('続けて、この請求書の' + rateLabel(nx.rate) + 'の分(' + yen(nx.amount) + ')を記録しますか?', '続けて入力する')) entryPrefill = Object.assign({}, nx, { next: pre.next.slice(1) });
+  }
+  renderShell();
 }
 
 /* ============================== 印刷 ============================== */
@@ -2076,7 +2139,7 @@ async function exportBackup() {
   if (ok && missing) toast('見つからない画像が ' + missing + ' 枚ありました(それ以外は書き出しました)');
 }
 /* ============================== バックアップの検証 ============================== */
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 const MAX_RECEIPT_BYTES = 20 * 1024 * 1024;
 const B64_RE = /^[A-Za-z0-9+\/]*={0,2}$/;
 // 旧版のデータを現在の形式に移行する。版ごとに1段ずつ上げる
@@ -2186,6 +2249,10 @@ function migrateBackup(raw) {
     });
     v = 11;
   }
+  if (v < 12) {
+    // v11 → v12: 取引に invoiceId(請求書から記録した売上)を追加。以前の取引は請求書とつながっていない(変更なし)
+    v = 12;
+  }
   out.schemaVersion = v;
   return out;
 }
@@ -2234,6 +2301,7 @@ function sanitizeBackup(raw) {
   const out = {};
   out.transactions = cleanRecords(raw.transactions, function (t) { return Object.prototype.hasOwnProperty.call(KIND_LABELS, t.kind); });
   // 画像 ID の形式が不正なら、取引は残して画像の参照だけ外す
+  if (out.transactions) out.transactions.forEach(function (t) { if (t.invoiceId !== undefined && !(typeof t.invoiceId === 'string' && ID_RE.test(t.invoiceId))) delete t.invoiceId; });
   if (out.transactions) out.transactions.forEach(function (t) { if (t.linkedAssetId !== undefined && !(typeof t.linkedAssetId === 'string' && ID_RE.test(t.linkedAssetId))) delete t.linkedAssetId; });
   // 添付ファイルの一覧: ID の形式・形式名・ファイル名の長さを確かめ、不正なものは外す(取引・請求書は残す)
   const ATTACH_TYPES = ['image/jpeg', 'image/png', 'image/heic', 'application/pdf'];
@@ -2390,7 +2458,7 @@ const HISTORY_FIELDS = [
   ['kind', '区分', 'kind'], ['date', '日付', 'date'], ['amount', '金額', 'yen'], ['account', '勘定科目', 'account'], ['accountType', '科目の区分', 'accountType'],
   ['fund', '資金', 'fund'], ['liability', '負債の科目', 'liability'], ['partnerId', '取引先', 'partner'], ['memo', 'メモ', 'text'],
   ['taxCategory', '消費税の税区分', 'taxCategory'], ['businessType', '事業区分', 'businessType'], ['attachments', '添付ファイル', 'attachments'],
-  ['receiptAssetId', 'レシート画像', 'receipt'], ['linkedAssetId', '連動する固定資産', 'linkedAsset'],
+  ['receiptAssetId', 'レシート画像', 'receipt'], ['linkedAssetId', '連動する固定資産', 'linkedAsset'], ['invoiceId', 'もとの請求書', 'invoiceRef'],
   // 請求書
   ['number', '請求書番号', 'text'], ['issueDate', '発行日', 'date'], ['transactionDate', '取引年月日', 'text'], ['dueDate', '支払期限', 'date'],
   ['clientName', '宛先', 'text'], ['honorific', '敬称', 'text'], ['clientPostalCode', '宛先の郵便番号', 'text'], ['clientAddress', '宛先住所', 'text'], ['status', '状態', 'text'], ['items', '明細', 'items'],
@@ -2452,6 +2520,7 @@ function historyValue(k, v, rec) {
     case 'taxReview': return v === 'pending' ? '見直しが必要' : '確認済み';
     case 'rate': return rateLabel(Number(v));
     case 'receipt': return '画像あり';
+    case 'invoiceRef': { const iv = findById(state.invoices || [], v); return iv ? '請求書 No.' + iv.number : '(削除された請求書)'; }
     case 'issued': return v && v.view ? '固定済み(' + historyDate(v.at || '') + (v.migrated ? '・移行時の内容' : '') + ')' : '(なし)';
     case 'linkedAsset': { const a = findById(state.fixedAssets || [], v); return a ? a.name : '(削除された固定資産)'; }
     case 'items': return Array.isArray(v) && v.length ? v.map(function (it) { return (it.name || '(内容なし)') + ' ' + (Number(it.qty) || 0) + ' × ' + yen(it.unitPrice) + '(' + rateLabel(itemRate({}, it)) + ')'; }).join(' / ') : '(なし)';

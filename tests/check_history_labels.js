@@ -18,7 +18,7 @@ var known = {}; app.HISTORY_FIELDS.forEach(function (f) { known[f[0]] = f; });
 
 // 1. データモデル(CLAUDE.md の「データモデル」)のすべての項目。項目を増やしたらここにも足す
 var MODEL = {
-  transaction: ['id', 'kind', 'date', 'amount', 'memo', 'fund', 'account', 'accountType', 'liability', 'partnerId', 'taxCategory', 'businessType', 'attachments', 'receiptAssetId', 'linkedAssetId', 'createdAt'],
+  transaction: ['id', 'kind', 'date', 'amount', 'memo', 'fund', 'account', 'accountType', 'liability', 'partnerId', 'taxCategory', 'businessType', 'attachments', 'receiptAssetId', 'linkedAssetId', 'invoiceId', 'createdAt'],
   invoice: ['id', 'number', 'issueDate', 'transactionDate', 'dueDate', 'clientName', 'clientAddress', 'partnerId', 'status', 'items', 'taxRate', 'taxRounding', 'notes', 'attachments', 'createdAt', 'honorific', 'clientPostalCode', 'revisionOf', 'issued'],
   fixedAsset: ['id', 'name', 'acquisitionDate', 'cost', 'usefulLifeYears', 'payFund', 'disposalDate', 'disposalType', 'saleAmount', 'saleFund'],
   inventory: ['opening', 'closing'], taxInterim: ['national', 'local'], partner: ['id', 'name', 'address'], bankAccount: ['id', 'name', 'opening']
