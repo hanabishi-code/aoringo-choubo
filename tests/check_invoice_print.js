@@ -23,7 +23,7 @@ check('自社: 名前・TEL・FAX・登録番号', ['架空デザイン事務所
 // 10%: 50,000 → 消費税 5,000 / 8%: 2,468 → 197.44 → 切り捨て 197 / 合計 52,468 + 5,197 = 57,665
 check('金額: 御請求金額・小計・税率ごと(切り捨て)', ['¥ 57,665', '>52,468<', '>50,000<', '>2,468<', '>5,197<', '>5,000<', '>197<'].map(function (x) { return html.indexOf(x) >= 0; }), [true, true, true, true, true, true, true]);
 check('8% の明細に※と注記', [/打ち合わせ菓子 ※/.test(html), /※は軽減税率\(8%\)対象/.test(html)], [true, true]);
-check('明細は最低9行(2行 + 空行7行)', (html.match(/<tr><td style="[^"]*border-left:1px solid #333;border-bottom:1px solid #999;"/g) || []).length, 9);
+check('明細は最低9行(2行 + 空行7行)', (html.match(/<tr><td style="[^"]*border-left:1px solid #333;border-bottom:1px solid #333;"/g) || []).length, 9);
 check('振込先は分けて入力した内容', ['架空銀行 見本支店', '普通 1234567', '口座名義: ミホン タロウ'].map(function (x) { return html.indexOf(x) >= 0; }), [true, true, true]);
 check('控えの印は指定したときだけ', [/>控</.test(html), />控</.test(app.invoicePrintHtml(app.invoiceViewModel(inv), { copy: true }))], [false, true]);
 

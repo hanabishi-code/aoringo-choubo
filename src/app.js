@@ -1908,12 +1908,12 @@ function invoicePrintHtml(m, opts) {
   // A4 縦 1枚に収まるよう、余白・行の高さを詰めている(明細 9 行のとき約 950px。印刷できる高さは約 1024px)
   const B = 'border:1px solid #333;', cell = 'padding:3px 8px;', th = 'background:#e6e6e6;font-weight:normal;';
   const rows = m.items.map(function (it) {
-    return '<tr><td style="' + cell + 'border-left:1px solid #333;border-bottom:1px solid #999;">' + esc(it.name) + (it.taxRate === 8 ? ' ※' : '') + '</td>' +
-      '<td style="' + cell + 'text-align:right;border-left:1px dotted #999;border-bottom:1px solid #999;">' + num(it.qty) + '</td>' +
-      '<td style="' + cell + 'text-align:right;border-left:1px dotted #999;border-bottom:1px solid #999;">' + num(it.unitPrice) + '</td>' +
-      '<td style="' + cell + 'text-align:right;border-left:1px dotted #999;border-right:1px solid #333;border-bottom:1px solid #999;">' + num(it.qty * it.unitPrice) + '</td></tr>';
+    return '<tr><td style="' + cell + 'border-left:1px solid #333;border-bottom:1px solid #333;">' + esc(it.name) + (it.taxRate === 8 ? ' ※' : '') + '</td>' +
+      '<td style="' + cell + 'text-align:right;border-left:1px solid #333;border-bottom:1px solid #333;">' + num(it.qty) + '</td>' +
+      '<td style="' + cell + 'text-align:right;border-left:1px solid #333;border-bottom:1px solid #333;">' + num(it.unitPrice) + '</td>' +
+      '<td style="' + cell + 'text-align:right;border-left:1px solid #333;border-right:1px solid #333;border-bottom:1px solid #333;">' + num(it.qty * it.unitPrice) + '</td></tr>';
   });
-  while (rows.length < 9) rows.push('<tr><td style="' + cell + 'height:1.3em;border-left:1px solid #333;border-bottom:1px solid #999;"></td><td style="border-left:1px dotted #999;border-bottom:1px solid #999;"></td><td style="border-left:1px dotted #999;border-bottom:1px solid #999;"></td><td style="border-left:1px dotted #999;border-right:1px solid #333;border-bottom:1px solid #999;"></td></tr>');
+  while (rows.length < 9) rows.push('<tr><td style="' + cell + 'height:1.3em;border-left:1px solid #333;border-bottom:1px solid #333;"></td><td style="border-left:1px solid #333;border-bottom:1px solid #333;"></td><td style="border-left:1px solid #333;border-bottom:1px solid #333;"></td><td style="border-left:1px solid #333;border-right:1px solid #333;border-bottom:1px solid #333;"></td></tr>');
   const iss = m.issuer;
   const bankHtml = m.bank.text !== undefined ? '<div style="white-space:pre-wrap;">' + esc(m.bank.text) + '</div>'
     : '<div>' + esc([m.bank.name, m.bank.branch].filter(Boolean).join(' ')) + '</div><div>' + esc([m.bank.type, m.bank.number].filter(Boolean).join(' ')) + '</div>' + (m.bank.holder ? '<div>口座名義: ' + esc(m.bank.holder) + '</div>' : '');
