@@ -139,10 +139,12 @@
   .storage-dot.warn { background: var(--vermillion); }
 
   #print-area { display: none; }
-  @page { size: A4 portrait; margin: 14mm 14mm 12mm; }
+  @page { size: A4 portrait; margin: 12mm 0; }
   @media print {
-    body * { visibility: hidden; }
-    #print-area, #print-area * { visibility: visible; }
-    #print-area { display: block; position: absolute; top: 0; left: 0; width: 100%; padding: 0; background: #fff; }
-    #print-area * { -webkit-print-color-adjust: exact; print-color-adjust: exact; } /* 見出しの灰色を印刷する */
+    /* アプリの画面は印刷しない(見えなくするだけだと場所が残って白紙のページができるため、外す) */
+    #app, #toast-wrap, #modal-root { display: none !important; }
+    html, body { background: #fff !important; margin: 0; padding: 0; }
+    /* 請求書の幅は紙(A4 = 210mm)に合わせて固定する。画面の幅に合わせると右側が切れるため */
+    #print-area { display: block; position: static; width: 180mm; margin: 0 auto; padding: 0; background: #fff; box-sizing: border-box; }
+    #print-area * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; } /* 見出しの灰色を印刷する */
   }

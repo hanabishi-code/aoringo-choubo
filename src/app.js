@@ -1922,16 +1922,17 @@ function invoicePrintHtml(m, opts) {
     '<h1 style="text-align:center;font-size:24px;letter-spacing:0.5em;font-weight:normal;margin:0 0 2px;">御請求書</h1>' +
     (m.revisionOf ? '<div style="text-align:center;font-size:12px;margin-bottom:6px;">(請求書番号 ' + esc(m.revisionOf) + ' の修正)</div>' : '<div style="height:6px;"></div>') +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;">' +
-      '<div style="flex:1;padding-top:14px;"><div style="font-size:17px;border-bottom:1px solid #333;padding-bottom:2px;display:inline-block;min-width:70%;">' + esc(m.client.name) + ' ' + esc(m.client.honorific) + '</div>' +
-        (m.client.postal ? '<div style="margin-top:6px;">〒' + esc(m.client.postal) + '</div>' : '') + (m.client.address ? '<div>' + esc(m.client.address) + '</div>' : '') + '</div>' +
-      '<div style="width:46%;">' +
-        '<table style="border-collapse:collapse;width:100%;margin-bottom:6px;">' +
+      '<div style="flex:1;padding-top:30px;"><div style="font-size:21px;border-bottom:1px solid #333;padding-bottom:3px;display:inline-block;min-width:80%;">' + esc(m.client.name) + ' ' + esc(m.client.honorific) + '</div>' +
+        (m.client.postal ? '<div style="margin-top:14px;">〒' + esc(m.client.postal) + '</div>' : '<div style="height:14px;"></div>') + (m.client.address ? '<div>' + esc(m.client.address) + '</div>' : '') + '</div>' +
+      '<div style="width:46%;padding-top:20px;">' +
+        '<table style="border-collapse:collapse;width:100%;margin-bottom:10px;">' +
           [['請求書番号', esc(m.number)], ['発行日', jpDate(m.issueDate)], ['取引年月日', jpDate(m.transactionDate)], ['お支払い期限', jpDate(m.dueDate)]].map(function (r) { return '<tr><th style="' + B + cell + th + 'width:38%;text-align:left;">' + r[0] + '</th><td style="' + B + cell + '">' + r[1] + '</td></tr>'; }).join('') +
         '</table>' +
-        '<div style="font-size:16px;">' + esc(iss.name) + '</div>' + (iss.owner ? '<div>' + esc(iss.owner) + '</div>' : '') +
+        // 自社の情報は、上の枠の下に中央そろえで置く
+        '<div style="text-align:center;"><div style="font-size:16px;">' + esc(iss.name) + '</div>' + (iss.owner ? '<div>' + esc(iss.owner) + '</div>' : '') +
         (iss.postal ? '<div>〒' + esc(iss.postal) + '</div>' : '') + (iss.address ? '<div>' + esc(iss.address) + '</div>' : '') +
-        (iss.phone ? '<div>TEL: ' + esc(iss.phone) + '</div>' : '') + (iss.fax ? '<div>FAX: ' + esc(iss.fax) + '</div>' : '') +
-        (iss.regNo ? '<div>登録番号: ' + esc(iss.regNo) + '</div>' : '') +
+        (iss.phone || iss.fax ? '<div>' + [iss.phone ? 'TEL: ' + esc(iss.phone) : '', iss.fax ? 'FAX: ' + esc(iss.fax) : ''].filter(Boolean).join('  ') + '</div>' : '') +
+        (iss.regNo ? '<div>登録番号: ' + esc(iss.regNo) + '</div>' : '') + '</div>' +
       '</div></div>' +
     '<div style="margin:10px 0 4px;">下記のとおりご請求申し上げます。</div>' +
     '<table style="border-collapse:collapse;margin-bottom:6px;"><tr><th style="' + B + 'padding:6px 14px;' + th + '">御請求金額</th><td style="' + B + 'padding:6px 18px;font-size:19px;">¥ ' + num(t.total) + ' <span style="font-size:12px;">(税込)</span></td></tr></table>' +
