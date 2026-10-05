@@ -60,6 +60,6 @@ var badIssued = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 11, invoi
 check('取り込み: 形のおかしい固定内容は外す/値は検査して正規化', [app.isIssuedInvoice(badIssued.invoices[0]), badIssued.invoices[1].issued.view.client.honorific, badIssued.invoices[1].issued.view.bank.type, badIssued.invoices[1].issued.view.items[0].taxRate, badIssued.invoices[1].issued.view.items[0].qty, badIssued.invoices[1].issued.view.taxRounding], [false, '御中', '', 10, 2, 'round']);
 var rev = app.invoicePrintHtml(app.invoiceViewModel(Object.assign({}, inv, { revisionOf: '2026-0001' }), app.state.settings));
 check('修正版の印刷に「請求書番号 ○○ の修正」', /請求書番号 2026-0001 の修正/.test(rev), true);
-check('SCHEMA_VERSION は 11', app.SCHEMA_VERSION, 11);
+check('SCHEMA_VERSION は 11 以上(最新の版数は tests/check_sales.js)', app.SCHEMA_VERSION >= 11, true);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';
