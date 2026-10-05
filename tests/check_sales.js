@@ -46,5 +46,10 @@ var s = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 12, transactions:
 check('取り込み: 正しい invoiceId は残し、不正なものは外す', s.transactions.map(function (t) { return t.invoiceId; }), ['iv_ok', undefined]);
 check('変更履歴: もとの請求書は番号で表示', [app.historyValue('invoiceId', 'iv_1'), app.historyValue('invoiceId', 'iv_gone')], ['請求書 No.2026-001', '(削除された請求書)']);
 check('SCHEMA_VERSION は 12', app.SCHEMA_VERSION, 12);
+/* 5. 請求書のタブを表示しない設定 */
+var hs = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 12, settings: { hideInvoiceTab: 1 } });
+var hb = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 12, settings: { hideInvoiceTab: 5 } });
+check('設定: 請求書のタブを表示しない(1)は取り込み、0・1 以外は取り込まない、初期値は表示する(0)', [hs.settings.hideInvoiceTab, hb.settings.hideInvoiceTab, app.defaultSettings().hideInvoiceTab], [1, undefined, 0]);
+check('変更履歴: 表示する/表示しない', [app.historyValue('hideInvoiceTab', 0), app.historyValue('hideInvoiceTab', 1)], ['表示する', '表示しない']);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';

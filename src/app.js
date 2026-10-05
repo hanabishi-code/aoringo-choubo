@@ -75,7 +75,7 @@ function fundPickerValue(id) {
   const c = el.querySelector('input:checked'); return c ? c.value : null;
 }
 function defaultSettings() {
-  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', postalCode: '', fax: '', bankName: '', bankBranch: '', bankAccountType: '', bankAccountNumber: '', bankAccountHolder: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto', depreciationRounding: 'floor', invoiceTaxRounding: 'floor', taxMethod: '', mainBusinessType: 0, taxReview: '' };
+  return { businessName: '', ownerName: '', address: '', phone: '', invoiceRegNo: '', bankInfo: '', postalCode: '', fax: '', bankName: '', bankBranch: '', bankAccountType: '', bankAccountNumber: '', bankAccountHolder: '', openingCash: 0, openingBank: 0, openingDate: todayStr(), invoiceSeq: 0, theme: 'auto', depreciationRounding: 'floor', invoiceTaxRounding: 'floor', taxMethod: '', mainBusinessType: 0, taxReview: '', hideInvoiceTab: 0 };
 }
 function toast(msg, ms) {
   const wrap = document.getElementById('toast-wrap'); const el = document.createElement('div');
@@ -968,7 +968,9 @@ function confirmDialog(message, okLabel) {
 /* ============================== レンダリング: シェル ============================== */
 function renderShell() {
   const cash = fundBalance('cash', todayStr()); const bank = totalBankBalance(todayStr());
-  const tabsHtml = TABS.map(function (t) { return '<button data-tab=\"' + esc(t.id) + '\" class="' + (t.id === currentTab ? 'active' : '') + '">' + t.label + '</button>'; }).join('');
+  // 設定で「請求書」のタブを表示しないことができる(ほかのソフトで請求書を作る方向け)
+  if (invoiceTabHidden() && currentTab === 'invoice') currentTab = 'entry';
+  const tabsHtml = TABS.filter(function (t) { return !(t.id === 'invoice' && invoiceTabHidden()); }).map(function (t) { return '<button data-tab=\"' + esc(t.id) + '\" class="' + (t.id === currentTab ? 'active' : '') + '">' + t.label + '</button>'; }).join('');
   document.getElementById('app').innerHTML =
     '<header class="app-header"><div class="header-row">' + hankoSvg() +
       '<div class="brand"><h1>青りんご帳簿</h1><div class="sub">' + esc(state.settings.businessName || '個人事業主の複式簿記') + '</div></div>' +
@@ -1443,6 +1445,7 @@ function invoiceMissing(inv) {
   return m;
 }
 const INVOICE_STATUSES = ['下書き', '送付済み(未入金)', '入金済み'];
+function invoiceTabHidden() { return Number((state.settings || {}).hideInvoiceTab) === 1; }
 const HONORIFICS = ['御中', '様'];
 let sendPromptFor = null; // 印刷したあと「送付済みにしましょう」と案内する請求書
 // 送付済みの請求書の印刷: そのまま(再発行)か、控え(「控」の印)かを選ぶ
@@ -1647,7 +1650,7 @@ function viewPartners() {
     '<div style="margin-bottom:12px;"><select class="year-select" id="partner-year">' + yearOptions + '</select><span class="muted" style="margin-left:8px;font-size:12px;">未払金・買掛金は年末時点の残高、未入金の請求書は「送付済み(未入金)」の合計</span></div>' +
     '<div class="table-scroll"><table class="ledger compact"><tr><th>取引先</th><th class="num">売上</th><th class="num">経費・仕入</th><th class="num">未払金・買掛金</th><th class="num">未入金の請求書</th></tr>' +
     (rows.length ? rows.map(function (r) {
-      return '<tr><td><a data-partner-sel="' + esc(r.id) + '" style="cursor:pointer;">' + esc(r.id === '-' ? '(未設定)' : partnerName(r.id)) + '</a> <a data-partner-invoices="' + esc(r.id) + '" style="cursor:pointer;font-size:11px;margin-left:6px;">請求書</a></td><td class="num">' + money(r.sales) + '</td><td class="num">' + money(r.costs) + '</td><td class="num">' + money(r.payable) + '</td><td class="num">' + money(r.unpaid) + '</td></tr>';
+      return '<tr><td><a data-partner-sel="' + esc(r.id) + '" style="cursor:pointer;">' + esc(r.id === '-' ? '(未設定)' : partnerName(r.id)) + '</a>' + (invoiceTabHidden() ? '' : ' <a data-partner-invoices="' + esc(r.id) + '" style="cursor:pointer;font-size:11px;margin-left:6px;">請求書</a>') + '</td><td class="num">' + money(r.sales) + '</td><td class="num">' + money(r.costs) + '</td><td class="num">' + money(r.payable) + '</td><td class="num">' + money(r.unpaid) + '</td></tr>';
     }).join('') : '<tr><td colspan="5" class="muted" style="padding:16px 6px;">この年の取引はありません</td></tr>') +
     '</table></div></section>' +
     (detail ? '<section class="block"><h2>' + esc(sel === '-' ? '取引先が未設定の取引' : partnerName(sel) + 'の取引') + '(新しい順・' + detail.length + ' 件)</h2><a data-partner-sel="" style="cursor:pointer;font-size:12px;">閉じる</a>' +
@@ -1807,6 +1810,9 @@ function viewSettings() {
       '</div>' +
       '<div class="note">アプリは起動時と終了時に自動でバックアップを取ります(直近30日分と各月末分を保持)。帳簿は税法上、原則7年(赤字の年は最長10年)の保存義務があります。データとバックアップはこの Mac 内にあるため、Time Machine などで外部ディスクにも保管してください。</div>' +
     '</section>' +
+    '<section class="block"><h2>画面の表示</h2>' +
+      '<label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="s-hideInvoiceTab"' + (Number(s.hideInvoiceTab) === 1 ? ' checked' : '') + '><span>「請求書」のタブを表示しない<br><span class="muted" style="font-size:12px;">ほかのソフトで請求書を作っている方向けです。表示しなくても、作った請求書は消えません(いつでも表示に戻せます)。</span></span></label>' +
+    '</section>' +
     '<section class="block"><h2>危険な操作</h2><button class="btn danger" id="wipe-all">すべてのデータを削除する</button></section>'
   );
 }
@@ -1866,7 +1872,9 @@ function bindViewEvents() {
     invoiceDraft = JSON.parse(JSON.stringify(inv)); editingInvoiceId = inv.id; renderView(); }); });
   document.querySelectorAll('[data-del-inv]').forEach(function (a) { a.addEventListener('click', async function () {
     const inv = findById(state.invoices, a.dataset.delInv);
-    const msg = isIssuedInvoice(inv) ? '送付済みの請求書です。送った請求書の控えは保存が必要です(原則7年)。本当に削除しますか?' : 'この請求書を削除しますか?';
+    const sales = invoiceSalesTxs(inv).length;
+    const msg = (isIssuedInvoice(inv) ? '送付済みの請求書です。送った請求書の控えは保存が必要です(原則7年)。本当に削除しますか?' : 'この請求書を削除しますか?') +
+      (sales ? '\nこの請求書から記録した売上が ' + sales + ' 件あります。請求書を削除しても、売上の記録は残ります(取引の「もとの請求書」は「削除された請求書」と表示されます)。' : '');
     if (!(await confirmDialog(msg, '削除する'))) return; await Store.deleteInvoice(a.dataset.delInv); renderView(); }); });
   document.querySelectorAll('[data-print-inv]').forEach(function (a) { a.addEventListener('click', function () { choosePrint(findById(state.invoices, a.dataset.printInv)); }); });
   document.querySelectorAll('[data-send-inv]').forEach(function (a) { a.addEventListener('click', function () { markInvoiceSent(a.dataset.sendInv); }); });
@@ -1963,6 +1971,8 @@ function bindViewEvents() {
   const impBackup = document.getElementById('import-backup'); if (impBackup) impBackup.addEventListener('change', onImportBackup);
   // ボタンからファイル選択を開く(キーボードでも操作できるように label ではなく button を使う)
   const impBackupBtn = document.getElementById('import-backup-btn'); if (impBackupBtn && impBackup) impBackupBtn.addEventListener('click', function () { impBackup.value = ''; impBackup.click(); });
+  const hideInv = document.getElementById('s-hideInvoiceTab');
+  if (hideInv) hideInv.addEventListener('change', function () { Store.saveSettings({ hideInvoiceTab: hideInv.checked ? 1 : 0 }).then(renderShell); });
   const wipe = document.getElementById('wipe-all'); if (wipe) wipe.addEventListener('click', onWipeAll);
 }
 
@@ -2384,6 +2394,7 @@ function sanitizeBackup(raw) {
       else if (k === 'depreciationRounding' || k === 'invoiceTaxRounding') { if (Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, v)) out.settings[k] = v; }
       else if (k === 'taxMethod') { if (Object.prototype.hasOwnProperty.call(TAX_METHODS, v)) out.settings[k] = v; }
       else if (k === 'taxReview') { if (v === '' || v === 'pending') out.settings[k] = v; }
+      else if (k === 'hideInvoiceTab') { if (Number(v) === 0 || Number(v) === 1) out.settings[k] = Number(v); }
       else if (k === 'bankAccountType') { if (v === '' || v === '普通' || v === '当座') out.settings[k] = v; }
       else if (typeof v === 'string') out.settings[k] = v.slice(0, 2000);
     });
@@ -2475,7 +2486,7 @@ const HISTORY_FIELDS = [
   ['bankName', '振込先の銀行名', 'text'], ['bankBranch', '振込先の支店名', 'text'], ['bankAccountType', '振込先の種別', 'text'], ['bankAccountNumber', '振込先の口座番号', 'text'], ['bankAccountHolder', '振込先の口座名義', 'text'], ['bankInfo', '振込先(以前の文章)', 'text'],
   ['openingDate', '開始日', 'date'], ['openingCash', '開始時の現金', 'yen'], ['openingBank', '開始時の預金', 'yen'], ['invoiceSeq', '請求書の連番', 'int'],
   ['theme', '表示テーマ', 'theme'], ['taxMethod', '消費税の課税方式', 'taxMethod'], ['mainBusinessType', '主たる事業区分', 'businessType'],
-  ['invoiceTaxRounding', '請求書の消費税の端数処理', 'rounding'], ['depreciationRounding', '減価償却の端数処理', 'rounding'], ['taxReview', '税区分の見直し', 'taxReview'],
+  ['invoiceTaxRounding', '請求書の消費税の端数処理', 'rounding'], ['depreciationRounding', '減価償却の端数処理', 'rounding'], ['taxReview', '税区分の見直し', 'taxReview'], ['hideInvoiceTab', '請求書のタブ', 'hideTab'],
   // 表示しない項目(内部の ID・記録日時)
   ['id', '', 'hidden'], ['createdAt', '', 'hidden'], ['addedAt', '', 'hidden']
 ];
@@ -2520,6 +2531,7 @@ function historyValue(k, v, rec) {
     case 'taxReview': return v === 'pending' ? '見直しが必要' : '確認済み';
     case 'rate': return rateLabel(Number(v));
     case 'receipt': return '画像あり';
+    case 'hideTab': return Number(v) === 1 ? '表示しない' : '表示する';
     case 'invoiceRef': { const iv = findById(state.invoices || [], v); return iv ? '請求書 No.' + iv.number : '(削除された請求書)'; }
     case 'issued': return v && v.view ? '固定済み(' + historyDate(v.at || '') + (v.migrated ? '・移行時の内容' : '') + ')' : '(なし)';
     case 'linkedAsset': { const a = findById(state.fixedAssets || [], v); return a ? a.name : '(削除された固定資産)'; }
