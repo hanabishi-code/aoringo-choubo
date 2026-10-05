@@ -5,7 +5,7 @@ function read(p) { return $.NSString.stringWithContentsOfFileEncodingError(p, 4,
 var document = { addEventListener: function () {} }; var window = {};
 var localStorage = { getItem: function () { return null; }, setItem: function () {} };
 var app = (new Function('document', 'window', 'localStorage', read('src/app.js') +
-  '\nreturn { state: state, defaultSettings: defaultSettings, invoiceViewModel: invoiceViewModel, invoicePrintHtml: invoicePrintHtml, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION };'))(document, window, localStorage);
+  '\nreturn { state: state, defaultSettings: defaultSettings, invoiceViewModel: invoiceViewModel, invoicePrintHtml: invoicePrintHtml, sanitizeBackup: sanitizeBackup, SCHEMA_VERSION: SCHEMA_VERSION, isIssuedInvoice: isIssuedInvoice, invoiceTotals: invoiceTotals };'))(document, window, localStorage);
 var results = [];
 function check(name, actual, expected) {
   var ok = JSON.stringify(actual) === JSON.stringify(expected);
@@ -40,6 +40,26 @@ var m = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 9, invoices: [{ i
   partners: [{ id: 'pt_1', name: 'A', postalCode: '123-4567890123' }], settings: { bankAccountType: '貯金' } });
 check('移行 v9→v10: 以前の請求書の敬称は「様」(新しい請求書の初期値は「御中」)', m.invoices.map(function (i) { return i.honorific; }), ['様', '御中']);
 check('取り込み: 郵便番号は 10 文字まで、振込先の種別は 普通・当座 だけ', [m.partners[0].postalCode, m.settings.bankAccountType], ['123-456789', undefined]);
-check('SCHEMA_VERSION は 10 以上', app.SCHEMA_VERSION >= 10, true);
+
+
+/* 送付済みの請求書の固定(schemaVersion 11) */
+settings({ bankName: '架空銀行', bankBranch: '見本支店', bankAccountType: '普通', bankAccountNumber: '1234567', bankAccountHolder: 'ミホン タロウ' });
+var mg = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 10, settings: app.state.settings, invoices: [
+  Object.assign({ id: 'iv_sent', status: '送付済み(未入金)' }, inv), Object.assign({ id: 'iv_paid', status: '入金済み' }, inv), Object.assign({ id: 'iv_draft', status: '下書き' }, inv)] });
+check('移行 v10→v11: 送付済み・入金済みは移行時の設定の内容で固定、下書きは固定しない', mg.invoices.map(function (i) { return [app.isIssuedInvoice(i), !!(i.issued && i.issued.migrated)]; }), [[true, true], [true, true], [false, false]]);
+var sent = mg.invoices[0];
+check('固定した内容: 宛先・自社・振込先・明細・端数処理', [sent.issued.view.client.name, sent.issued.view.issuer.regNo, sent.issued.view.bank.number, sent.issued.view.items.length, sent.issued.view.taxRounding], ['株式会社サンプル', 'T0000000000000', '1234567', 2, 'floor']);
+// あとで設定・取引先・請求書の項目を変えても、送付済みの印刷は固定した内容のまま
+settings({ businessName: '別の名前に変えた', invoiceRegNo: 'T9999999999999', bankName: '別の銀行', bankAccountNumber: '9876543' });
+var changed = Object.assign({}, sent, { clientName: '変更後の宛先', items: [{ name: '別の明細', qty: 1, unitPrice: 1, taxRate: 10 }] });
+var hs = app.invoicePrintHtml(app.invoiceViewModel(changed));
+check('設定や項目を変えても、送付済みの印刷は送ったときの内容', [/架空デザイン事務所/.test(hs), /T0000000000000/.test(hs), /1234567/.test(hs), /株式会社サンプル/.test(hs), /別の名前に変えた|変更後の宛先|別の明細|9876543/.test(hs)], [true, true, true, true, false]);
+check('送付済みの金額も送ったときのまま(¥ 57,665)', /¥ 57,665/.test(hs), true);
+var badIssued = app.sanitizeBackup({ app: 'keiri-note', schemaVersion: 11, invoices: [{ id: 'iv_b1', number: '1', items: [], status: '送付済み(未入金)', issued: { at: 'x', view: { items: 'not array' } } },
+  { id: 'iv_b2', number: '2', items: [], status: '送付済み(未入金)', issued: { at: '2026-10-05', view: { number: '2', client: { name: '<b>x</b>', honorific: '殿' }, issuer: {}, bank: { type: '定期' }, items: [{ name: 'a', qty: '2', unitPrice: '100', taxRate: 5 }], taxRounding: 'evil' } } }] });
+check('取り込み: 形のおかしい固定内容は外す/値は検査して正規化', [app.isIssuedInvoice(badIssued.invoices[0]), badIssued.invoices[1].issued.view.client.honorific, badIssued.invoices[1].issued.view.bank.type, badIssued.invoices[1].issued.view.items[0].taxRate, badIssued.invoices[1].issued.view.items[0].qty, badIssued.invoices[1].issued.view.taxRounding], [false, '御中', '', 10, 2, 'round']);
+var rev = app.invoicePrintHtml(app.invoiceViewModel(Object.assign({}, inv, { revisionOf: '2026-0001' }), app.state.settings));
+check('修正版の印刷に「請求書番号 ○○ の修正」', /請求書番号 2026-0001 の修正/.test(rev), true);
+check('SCHEMA_VERSION は 11', app.SCHEMA_VERSION, 11);
 
 results.join('\n') + '\n\n' + results.filter(function (r) { return r.indexOf('NG') === 0; }).length + ' 件 NG / ' + results.length + ' 件';
