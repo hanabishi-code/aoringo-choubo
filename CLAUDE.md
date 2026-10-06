@@ -23,30 +23,36 @@
 - 開発ビルドの起動: `src-tauri/target/debug/keiri-note`(`cargo build` 後)。
   自己テスト: `KEIRI_SELFTEST=1`(画像保存)/ `KEIRI_SELFTEST=stress`(強制終了テスト用)+ `KEIRI_DATA_DIR=<一時フォルダ>`。開発ビルドのみ有効
 - テスト: `cargo test`(src-tauri)、`osascript -l JavaScript tests/<名前>.js`(check_calc・check_tax・check_partners・check_accounts・check_attach・check_search・
-  check_history・check_history_labels・check_import・check_receipt_ipc)。一覧と内容は README の「テスト」
+  check_history・check_history_labels・check_invoice_print・check_sales・check_import・check_receipt_ipc)。一覧と内容は README の「テスト」
 
-## データモデル(schemaVersion 9)
+## データモデル(schemaVersion 12)
 - `transactions[]`: id, kind(KIND_LABELS のキー), date, amount(売上は税込), memo, fund(cash / 口座の ID), 勘定科目関連(account, accountType, liability),
   partnerId?, taxCategory?(standard / reduced / exempt / outside / export。収入は必須、経費などは記録のみ), businessType?(1〜6。売上ごとの事業区分の上書き),
-  attachments?[{ id, type, name, addedAt }], linkedAssetId?, createdAt
+  attachments?[{ id, type, name, addedAt }], linkedAssetId?, invoiceId?(請求書から記録した売上のもとの請求書), createdAt
   - kind `asset_purchase`(固定資産の購入): 固定資産台帳から自動で作る。借方 固定資産 / 貸方 fund(現金・口座)または liability(accrued=未払金)
   - `linkedAssetId` のある取引は台帳と連動(購入 = asset_purchase、売却代金 = contribution)。取引一覧から直接は編集・削除しない
-- `invoices[]`: id, number, issueDate, transactionDate(取引年月日・自由記述), dueDate, clientName, clientAddress, partnerId?,
-  status(下書き / 送付済み(未入金) / 入金済み), items[{ name, qty, unitPrice, taxRate(10 / 8) }], taxRounding(作成時の端数処理), notes, attachments?
+- `invoices[]`: id, number, issueDate, transactionDate(取引年月日・自由記述), dueDate, clientName, honorific(御中 / 様 など), clientPostalCode, clientAddress, partnerId?,
+  status(下書き / 送付済み(未入金) / 入金済み), items[{ name, qty, unitPrice, taxRate(10 / 8) }], taxRounding(作成時の端数処理), notes, attachments?,
+  revisionOf?(修正版のときの元の請求書番号), issued?{ at, migrated?, view }(送付済みにしたときの印刷内容を固定。以後の設定・取引先の変更は反映しない)
+  - 請求書から売上を記録するのは手動のみ(税率ごとに1件、取引の invoiceId で記録済みを判定)。自動では作らない
 - `fixedAssets[]`: id, name, acquisitionDate, cost, usefulLifeYears(2〜50), disposalDate,
   payFund?(cash / 口座の ID / accrued。未設定は支払い未記録の既存資産), disposalType?(retire=除却 / sale=売却), saleAmount?, saleFund?(cash / 口座の ID)
-- `partners[]`: id, name, address?(取引先。取引・請求書は partnerId で指す)
+- `partners[]`: id, name, postalCode?, address?(取引先。取引・請求書は partnerId で指す)
 - `bankAccounts[]`: id, name, opening(普通預金の口座ごとの開始残高。最初の口座の ID は 'bank')
 - `inventoryYearEnd{ "YYYY": {opening, closing} }`、`taxInterim{ "YYYY": {national, local} }`(消費税の中間納付)
 - `settings`: `defaultSettings()` のキーのみ(depreciationRounding・invoiceTaxRounding: floor / round / ceil(初期値 floor)、
-  taxMethod: '' / exempt / simplified / general / special20 / special30(初期値 未設定)、mainBusinessType: 0〜6、taxReview など)
+  taxMethod: '' / exempt / simplified / general / special20 / special30(初期値 未設定)、mainBusinessType: 0〜6、taxReview、
+  postalCode・fax・振込先の分割入力(bankName / bankBranch / bankAccountType(普通 / 当座)/ bankAccountNumber / bankAccountHolder。旧 bankInfo は未入力時に印刷)、
+  hideInvoiceTab: 0 / 1(請求書のタブを表示しない)など)
 - バックアップ JSON のみ: `receipts{ 添付ファイルID: base64 }`(添付ファイルの原本)
 - 税率の表 `TAX_RATES`(適用開始日つき)はコードの定数。法改正時に更新する
 - 版ごとの変更と移行(`migrateBackup()`):
   v2 receipts / v3 固定資産の処分の種類・売却代金(処分日のある既存資産は除却)/ v4 asset_purchase と payFund(既存資産は未設定のまま)/
   v5 添付を attachments[] に(receiptAssetId から)/ v6 消費税(既存の売上は課税・標準税率、taxReview で見直しを案内、課税方式・事業区分は未設定のまま)と
   請求書の明細ごとの税率・取引年月日 / v7 請求書の taxRounding(以前の請求書は四捨五入)/ v8 取引先(既存の請求書の宛先から作成、取引のメモからは推定しない)/
-  v9 口座(最初の口座 'bank'・「普通預金」、設定の openingBank を口座の開始残高に移して 0 に)。
+  v9 口座(最初の口座 'bank'・「普通預金」、設定の openingBank を口座の開始残高に移して 0 に)/
+  v10 請求書の敬称・宛先の郵便番号、設定の郵便番号・FAX・振込先の分割(以前の請求書の敬称は「様」、bankInfo は自動で分けない)/
+  v11 送付済み・入金済みの請求書を移行時の設定の内容で固定(issued.migrated)/ v12 取引の invoiceId(以前の取引は変更なし)。
   移行の前に data.json を `*-pre-migrate.json` として必ず退避する
 - 変更履歴の表示: 項目を増やしたら `HISTORY_FIELDS`(表示名と値の表示のしかた)にも追加する(tests/check_history_labels.js が漏れを検出)
 データ形式を変える場合は schemaVersion を上げ、旧版からの移行関数を必ず書くこと。
