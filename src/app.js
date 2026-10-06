@@ -966,7 +966,17 @@ function confirmDialog(message, okLabel) {
 }
 
 /* ============================== レンダリング: シェル ============================== */
+// 画面の色: 自動(Mac の外観に合わせる)/ 白 / 黒。ウィンドウの枠も合わせる
+let appliedTheme = null;
+function applyTheme() {
+  const t = Object.prototype.hasOwnProperty.call(THEME_LABELS, (state.settings || {}).theme) ? state.settings.theme : 'auto';
+  if (t === appliedTheme) return;
+  appliedTheme = t;
+  if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  invoke('set_theme', { theme: t }).catch(function () {});
+}
 function renderShell() {
+  applyTheme();
   const cash = fundBalance('cash', todayStr()); const bank = totalBankBalance(todayStr());
   // 設定で「請求書」のタブを表示しないことができる(ほかのソフトで請求書を作る方向け)
   if (invoiceTabHidden() && currentTab === 'invoice') currentTab = 'entry';
@@ -1811,6 +1821,8 @@ function viewSettings() {
       '<div class="note">アプリは起動時と終了時に自動でバックアップを取ります(直近30日分と各月末分を保持)。帳簿は税法上、原則7年(赤字の年は最長10年)の保存義務があります。データとバックアップはこの Mac 内にあるため、Time Machine などで外部ディスクにも保管してください。</div>' +
     '</section>' +
     '<section class="block"><h2>画面の表示</h2>' +
+      '<div class="field"><label>画面の色</label><div class="radio-group" id="s-theme">' + Object.keys(THEME_LABELS).map(function (k) { return '<label><input type="radio" name="s-theme" value="' + k + '"' + ((s.theme || 'auto') === k ? ' checked' : '') + '><span>' + esc(THEME_LABELS[k]) + '</span></label>'; }).join('') + '</div>' +
+        '<div class="muted" style="font-size:12px;">「自動」は Mac の外観(ライト・ダーク)に合わせます。請求書の印刷・PDF は、どれを選んでも白です。</div></div>' +
       '<label style="display:flex;gap:8px;align-items:flex-start;"><input type="checkbox" id="s-hideInvoiceTab"' + (Number(s.hideInvoiceTab) === 1 ? ' checked' : '') + '><span>「請求書」のタブを表示しない<br><span class="muted" style="font-size:12px;">ほかのソフトで請求書を作っている方向けです。表示しなくても、作った請求書は消えません(いつでも表示に戻せます)。</span></span></label>' +
     '</section>' +
     '<section class="block"><h2>危険な操作</h2><button class="btn danger" id="wipe-all">すべてのデータを削除する</button></section>'
@@ -1971,6 +1983,7 @@ function bindViewEvents() {
   const impBackup = document.getElementById('import-backup'); if (impBackup) impBackup.addEventListener('change', onImportBackup);
   // ボタンからファイル選択を開く(キーボードでも操作できるように label ではなく button を使う)
   const impBackupBtn = document.getElementById('import-backup-btn'); if (impBackupBtn && impBackup) impBackupBtn.addEventListener('click', function () { impBackup.value = ''; impBackup.click(); });
+  document.querySelectorAll('input[name="s-theme"]').forEach(function (r) { r.addEventListener('change', function () { if (r.checked) Store.saveSettings({ theme: r.value }).then(renderShell); }); });
   const hideInv = document.getElementById('s-hideInvoiceTab');
   if (hideInv) hideInv.addEventListener('change', function () { Store.saveSettings({ hideInvoiceTab: hideInv.checked ? 1 : 0 }).then(renderShell); });
   const wipe = document.getElementById('wipe-all'); if (wipe) wipe.addEventListener('click', onWipeAll);
@@ -2395,6 +2408,7 @@ function sanitizeBackup(raw) {
       else if (k === 'depreciationRounding' || k === 'invoiceTaxRounding') { if (Object.prototype.hasOwnProperty.call(DEPRECIATION_ROUNDING, v)) out.settings[k] = v; }
       else if (k === 'taxMethod') { if (Object.prototype.hasOwnProperty.call(TAX_METHODS, v)) out.settings[k] = v; }
       else if (k === 'taxReview') { if (v === '' || v === 'pending') out.settings[k] = v; }
+      else if (k === 'theme') { if (Object.prototype.hasOwnProperty.call(THEME_LABELS, v)) out.settings[k] = v; }
       else if (k === 'bankAccountType') { if (v === '' || v === '普通' || v === '当座') out.settings[k] = v; }
       else if (typeof v === 'string') out.settings[k] = v.slice(0, 2000);
     });
@@ -2485,7 +2499,7 @@ const HISTORY_FIELDS = [
   ['businessName', '屋号', 'text'], ['ownerName', '氏名', 'text'], ['postalCode', '郵便番号', 'text'], ['phone', '電話番号', 'text'], ['fax', 'FAX', 'text'], ['invoiceRegNo', '登録番号', 'text'],
   ['bankName', '振込先の銀行名', 'text'], ['bankBranch', '振込先の支店名', 'text'], ['bankAccountType', '振込先の種別', 'text'], ['bankAccountNumber', '振込先の口座番号', 'text'], ['bankAccountHolder', '振込先の口座名義', 'text'], ['bankInfo', '振込先(以前の文章)', 'text'],
   ['openingDate', '開始日', 'date'], ['openingCash', '開始時の現金', 'yen'], ['openingBank', '開始時の預金', 'yen'], ['invoiceSeq', '請求書の連番', 'int'],
-  ['theme', '表示テーマ', 'theme'], ['taxMethod', '消費税の課税方式', 'taxMethod'], ['mainBusinessType', '主たる事業区分', 'businessType'],
+  ['theme', '画面の色', 'theme'], ['taxMethod', '消費税の課税方式', 'taxMethod'], ['mainBusinessType', '主たる事業区分', 'businessType'],
   ['invoiceTaxRounding', '請求書の消費税の端数処理', 'rounding'], ['depreciationRounding', '減価償却の端数処理', 'rounding'], ['taxReview', '税区分の見直し', 'taxReview'], ['hideInvoiceTab', '請求書のタブ', 'hideTab'],
   // 表示しない項目(内部の ID・記録日時)
   ['id', '', 'hidden'], ['createdAt', '', 'hidden'], ['addedAt', '', 'hidden']
@@ -2495,7 +2509,7 @@ const HISTORY_FIELD_LABELS = {}; HISTORY_FIELDS.forEach(function (f) { HISTORY_F
 // 対象によって意味が違う項目の表示名(同じキーでも、口座の opening は「開始残高」)
 const HISTORY_TARGET_LABELS = { bankAccount: { opening: '開始残高', name: '口座の名前' }, partner: { name: '取引先の名前' } };
 function historyLabel(target, k) { const t = HISTORY_TARGET_LABELS[target]; return (t && t[k]) || HISTORY_FIELD_LABELS[k] || 'その他の項目'; }
-const THEME_LABELS = { auto: '自動', light: 'ライト', dark: 'ダーク' };
+const THEME_LABELS = { auto: '自動(Mac に合わせる)', light: '白', dark: '黒' };
 function historyDate(v) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v)); return m ? m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日' : String(v); }
 function anyAccountLabel(key, type) {
   if (type && ACCOUNTS[type]) { const f = ACCOUNTS[type].find(function (a) { return a.key === key; }); if (f) return f.label; }

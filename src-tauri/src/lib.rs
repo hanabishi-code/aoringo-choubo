@@ -505,6 +505,18 @@ fn print_page(webview: tauri::Webview) -> Result<(), String> {
     webview.print().map_err(|e| e.to_string())
 }
 
+/// 画面の色(設定の「画面の色」)。ウィンドウの枠(タイトルバー)も同じ色にする。
+/// "light" / "dark" 以外は Mac の外観に合わせる
+#[tauri::command]
+fn set_theme(window: tauri::Window, theme: String) -> Result<(), String> {
+    let t = match theme.as_str() {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        _ => None,
+    };
+    window.set_theme(t).map_err(|e| e.to_string())
+}
+
 /// 表示用の一時コピーを消す(読み取り専用のファイルも消せる)
 fn clean_view_dir() {
     let vdir = std::env::temp_dir().join(VIEW_DIR_NAME);
@@ -526,6 +538,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            set_theme,
             load_data,
             save_data,
             export_file,

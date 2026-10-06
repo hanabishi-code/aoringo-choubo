@@ -1,9 +1,10 @@
   :root {
-    --paper: #F1EEE2;
-    --paper-2: #E8E3D2;
+    /* 白の画面: 背景はほぼ白(わずかに温かみ)、文字は濃く。補足の灰色の文字も背景 #FBFAF6 に対し 7.4:1、ボタン地 #F3F1EA に対し 6.8:1 */
+    --paper: #FBFAF6;
+    --paper-2: #F3F1EA;
     --paper-line: #D8D1B9;
-    --ink: #232C33;
-    --ink-muted: #6C6A5C;
+    --ink: #161B20;
+    --ink-muted: #55534A;
     --indigo: #2B4570;
     --indigo-deep: #1C2F4D;
     --vermillion: #B33F2E;
@@ -12,7 +13,7 @@
     --brand-gold: #8A640B;
     --brand-green: #1E8E3E;
     --brand-green-soft: rgba(30,142,62,0.12);
-    --brand-green-text: #18793A; /* 文字に使う緑(背景 #F1EEE2 に対し 4.71:1。線用の --brand-green は 3.62:1 で文字には不足) */
+    --brand-green-text: #18793A; /* 文字に使う緑(背景 #FBFAF6 に対し 5.24:1。線用の --brand-green は文字には不足) */
     --danger: #A23B2E;
     --font-display: 'Hiragino Mincho ProN', 'Yu Mincho', serif;
     --font-body: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif;
@@ -20,6 +21,9 @@
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
+  :root { color-scheme: light dark; }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --paper: #171814; --paper-2: #212219; --paper-line: #3A3A2D;
