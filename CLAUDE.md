@@ -75,7 +75,10 @@
 - [x] 旧版の JSON を取り込むと件数・金額合計が一致する(テスト用ファイルで確認)
 - [x] 不正な JSON を取り込んでも画面が壊れない
 
-## 第3段階: 公開準備
+## 第3段階: 公開準備(完了・2026-10-06 に v0.1.0 を公開)
+- 公開先: https://github.com/hanabishi-code/aoringo-choubo(public。push は main とタグのみ、GitHub CLI でログイン)
+- 配布の手順: main に push → タグ `v<版>` を push → Actions が universal の .dmg(`aoringo-choubo_<版>_universal.dmg`)と SHA256SUMS を下書きに添付
+  → 中身を確認 → ユーザーが自分の Mac で試してから「Publish release」。新しい版では tauri.conf.json と Cargo.toml の version を上げる
 - 計算ロジック(損益計算・減価償却・貸借対照表)のテスト
 - README: 概要、インストール手順(未署名アプリの開き方: システム設定 → プライバシーとセキュリティ → このまま開く)、FileVault と Time Machine の推奨、免責
 - LICENSE(ユーザーに種類を確認すること)
