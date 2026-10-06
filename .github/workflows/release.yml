@@ -65,7 +65,10 @@ jobs:
 
       - name: SHA-256
         working-directory: src-tauri/target/universal-apple-darwin/release/bundle/dmg
-        run: shasum -a 256 *.dmg | tee SHA256SUMS.txt
+        # GitHub は添付ファイル名の日本語を消す(「青りんご帳簿_0.1.0_…」→「_0.1.0_…」)ため、英字の名前に変えてから計算する
+        run: |
+          for f in *.dmg; do mv "$f" "aoringo-choubo_${f#*_}"; done
+          shasum -a 256 *.dmg | tee SHA256SUMS.txt
 
       - name: Release の下書きに添付
         working-directory: src-tauri/target/universal-apple-darwin/release/bundle/dmg
